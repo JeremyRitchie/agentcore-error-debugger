@@ -1,0 +1,264 @@
+name: Deploy Error Debugger AgentCore Stack
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'error_debugger/**'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - destroy
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  PROJECT_NAME: ${{ vars.ERROR_DEBUGGER_PROJECT_NAME || 'error-debugger' }}
+  ENVIRONMENT: ${{ vars.ENVIRONMENT || 'prod' }}
+  TF_VAR_project_name: ${{ vars.ERROR_DEBUGGER_PROJECT_NAME || 'error-debugger' }}
+  TF_VAR_environment: ${{ vars.ENVIRONMENT || 'prod' }}
+  TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  deploy:
+    name: Deploy Error Debugger Infrastructure
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action != 'destroy'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+          terraform_wrapper: false
+      
+      # ===== Terraform State Backend =====
+      - name: Setup Terraform Backend
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET_NAME="${PROJECT_NAME}-terraform-state-${ACCOUNT_ID}"
+          TABLE_NAME="${PROJECT_NAME}-terraform-locks"
+          
+          # Create S3 bucket if not exists
+          if ! aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
+            echo "Creating S3 bucket: $BUCKET_NAME"
+            aws s3api create-bucket --bucket "$BUCKET_NAME" --region $AWS_REGION
+            aws s3api put-bucket-versioning --bucket "$BUCKET_NAME" --versioning-configuration Status=Enabled
+            aws s3api put-bucket-encryption --bucket "$BUCKET_NAME" --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+          fi
+          
+          # Create DynamoDB table if not exists
+          if ! aws dynamodb describe-table --table-name "$TABLE_NAME" 2>/dev/null; then
+            echo "Creating DynamoDB table: $TABLE_NAME"
+            aws dynamodb create-table \
+              --table-name "$TABLE_NAME" \
+              --attribute-definitions AttributeName=LockID,AttributeType=S \
+              --key-schema AttributeName=LockID,KeyType=HASH \
+              --billing-mode PAY_PER_REQUEST
+            aws dynamodb wait table-exists --table-name "$TABLE_NAME"
+          fi
+          
+          # Export bucket name for terraform init
+          echo "TF_BACKEND_BUCKET=${BUCKET_NAME}" >> $GITHUB_ENV
+      
+      # ===== Build & Push Container First (needed for Runtime) =====
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Create ECR Repository if not exists
+        run: |
+          REPO_NAME="${PROJECT_NAME}-${ENVIRONMENT}-agent"
+          aws ecr describe-repositories --repository-names "$REPO_NAME" 2>/dev/null || \
+          aws ecr create-repository --repository-name "$REPO_NAME" --image-scanning-configuration scanOnPush=true
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Set up QEMU (for ARM64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      
+      - name: Build & Push Agent Container (AgentCore Runtime - ARM64)
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REPO_URL="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-agent"
+          
+          echo "Building Error Debugger multi-agent container for ARM64..."
+          cd error_debugger/agent
+          docker buildx build \
+            --platform linux/arm64 \
+            --push \
+            -t ${REPO_URL}:latest \
+            .
+          
+          echo "CONTAINER_IMAGE=${REPO_URL}:latest" >> $GITHUB_ENV
+      
+      # ===== Package Tool Lambdas =====
+      - name: Package Parser Lambda
+        run: |
+          echo "Packaging Parser Lambda..."
+          cd error_debugger/lambda/parser
+          zip -r ../../terraform/agentcore/parser.zip .
+      
+      - name: Package Security Lambda
+        run: |
+          echo "Packaging Security Lambda..."
+          cd error_debugger/lambda/security
+          zip -r ../../terraform/agentcore/security.zip .
+      
+      # ===== Terraform Init & Apply =====
+      - name: Terraform Init
+        working-directory: error_debugger/terraform/agentcore
+        run: terraform init -upgrade -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}"
+      
+      - name: Terraform Plan
+        working-directory: error_debugger/terraform/agentcore
+        run: terraform plan -out=tfplan
+      
+      - name: Terraform Apply
+        working-directory: error_debugger/terraform/agentcore
+        run: terraform apply -auto-approve tfplan
+      
+      # ===== Deploy Lambda Code =====
+      - name: Deploy Parser Lambda
+        working-directory: error_debugger/terraform/agentcore
+        run: |
+          LAMBDA_NAME="${PROJECT_NAME}-${ENVIRONMENT}-parser"
+          echo "Updating Parser Lambda: $LAMBDA_NAME"
+          aws lambda update-function-code \
+            --function-name "$LAMBDA_NAME" \
+            --zip-file fileb://parser.zip \
+            --publish || echo "Lambda update skipped (may not exist yet)"
+      
+      - name: Deploy Security Lambda
+        working-directory: error_debugger/terraform/agentcore
+        run: |
+          LAMBDA_NAME="${PROJECT_NAME}-${ENVIRONMENT}-security"
+          echo "Updating Security Lambda: $LAMBDA_NAME"
+          aws lambda update-function-code \
+            --function-name "$LAMBDA_NAME" \
+            --zip-file fileb://security.zip \
+            --publish || echo "Lambda update skipped (may not exist yet)"
+      
+      # ===== Get Terraform Outputs =====
+      - name: Get Outputs
+        id: tf-outputs
+        working-directory: error_debugger/terraform/agentcore
+        run: |
+          echo "ecr_repository=$(terraform output -raw ecr_repository_url)" >> $GITHUB_OUTPUT
+          echo "s3_bucket=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
+          echo "cloudfront_id=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_OUTPUT
+          echo "runtime_id=$(terraform output -raw runtime_id)" >> $GITHUB_OUTPUT
+          echo "gateway_url=$(terraform output -raw gateway_endpoint)" >> $GITHUB_OUTPUT
+          echo "memory_id=$(terraform output -raw memory_id)" >> $GITHUB_OUTPUT
+          echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
+      
+      # ===== Deploy Frontend =====
+      - name: Deploy Frontend
+        run: |
+          # Create runtime config
+          cat > error_debugger/app/config.js << EOF
+          window.AGENTCORE_CONFIG = {
+            gatewayUrl: '${{ steps.tf-outputs.outputs.gateway_url }}',
+            runtimeId: '${{ steps.tf-outputs.outputs.runtime_id }}',
+            memoryId: '${{ steps.tf-outputs.outputs.memory_id }}',
+          };
+          EOF
+          
+          # Sync to S3 (cache static assets)
+          aws s3 sync error_debugger/app/ s3://${{ steps.tf-outputs.outputs.s3_bucket }}/ \
+            --delete \
+            --cache-control "public, max-age=31536000" \
+            --exclude "*.html" \
+            --exclude "config.js"
+          
+          # Upload HTML and config with no-cache
+          aws s3 cp error_debugger/app/index.html s3://${{ steps.tf-outputs.outputs.s3_bucket }}/ \
+            --cache-control "no-cache, no-store, must-revalidate"
+          
+          aws s3 cp error_debugger/app/config.js s3://${{ steps.tf-outputs.outputs.s3_bucket }}/ \
+            --cache-control "no-cache, no-store, must-revalidate"
+      
+      # ===== Invalidate CloudFront =====
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ steps.tf-outputs.outputs.cloudfront_id }} \
+            --paths "/*"
+      
+      # ===== Summary =====
+      - name: Deployment Summary
+        run: |
+          echo "## 🐛 Error Debugger Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### AgentCore Resources" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource | ID |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| Runtime | \`${{ steps.tf-outputs.outputs.runtime_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Gateway | \`${{ steps.tf-outputs.outputs.gateway_url }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Memory | \`${{ steps.tf-outputs.outputs.memory_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Application" >> $GITHUB_STEP_SUMMARY
+          echo "🌐 **Website**: [${{ steps.tf-outputs.outputs.website_url }}](${{ steps.tf-outputs.outputs.website_url }})" >> $GITHUB_STEP_SUMMARY
+
+  destroy:
+    name: Destroy Infrastructure
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'destroy'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+      
+      - name: Setup Backend Config
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET_NAME="${PROJECT_NAME}-terraform-state-${ACCOUNT_ID}"
+          echo "TF_BACKEND_BUCKET=${BUCKET_NAME}" >> $GITHUB_ENV
+      
+      - name: Terraform Init
+        working-directory: error_debugger/terraform/agentcore
+        run: terraform init -backend-config="bucket=${{ env.TF_BACKEND_BUCKET }}"
+      
+      - name: Empty S3 Buckets
+        run: |
+          cd error_debugger/terraform/agentcore
+          BUCKET=$(terraform output -raw s3_bucket_name 2>/dev/null || echo "")
+          if [ -n "$BUCKET" ]; then
+            aws s3 rm s3://$BUCKET --recursive || true
+          fi
+      
+      - name: Terraform Destroy
+        working-directory: error_debugger/terraform/agentcore
+        run: terraform destroy -auto-approve
+

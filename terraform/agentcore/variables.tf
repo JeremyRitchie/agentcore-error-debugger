@@ -1,5 +1,17 @@
 # ===== Variables =====
 
+# Blog Post Feature Flag
+variable "feature_part" {
+  description = "Blog series part (1 = basic, 2 = advanced with memory/github)"
+  type        = number
+  default     = 2
+  
+  validation {
+    condition     = var.feature_part >= 1 && var.feature_part <= 2
+    error_message = "feature_part must be 1 or 2"
+  }
+}
+
 variable "project_name" {
   description = "Project name for resource naming"
   type        = string

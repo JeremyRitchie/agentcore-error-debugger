@@ -5,6 +5,10 @@ Multi-agent system using Strands framework on AgentCore Runtime
 This supervisor orchestrates specialist agents to provide comprehensive
 error analysis with diverse tools: parsing, security, context, root cause,
 fixes, memory, and statistics.
+
+BLOG SERIES FEATURE FLAGS:
+- Part 1: Basic multi-agent system (5 agents: Supervisor, Parser, Security, Root Cause, Fix)
+- Part 2: Advanced features (All 7 agents + Memory, Context, Stats)
 """
 import os
 import sys
@@ -14,16 +18,31 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
-# Import ALL specialist agents
+# ============================================================================
+# Feature Flags - Blog Post Parts
+# ============================================================================
+# Set via environment variable: FEATURE_PART=1 or FEATURE_PART=2
+FEATURE_PART = int(os.environ.get('FEATURE_PART', '2'))
+
+# Part 1 agents (always imported)
 from agents import (
     parser_agent,
     security_agent,
-    context_agent,
     rootcause_agent,
     fix_agent,
-    memory_agent,
-    stats_agent,
 )
+
+# Part 2 agents (conditionally imported)
+if FEATURE_PART >= 2:
+    from agents import (
+        context_agent,
+        memory_agent,
+        stats_agent,
+    )
+else:
+    context_agent = None
+    memory_agent = None
+    stats_agent = None
 
 # ============================================================================
 # AgentCore Runtime App
@@ -438,25 +457,37 @@ For comprehensive error debugging:
 # ============================================================================
 # Supervisor Agent Instance
 # ============================================================================
-supervisor = Agent(
-    system_prompt=SUPERVISOR_PROMPT,
-    tools=[
-        # Specialist Agents
+
+# Build tools list based on feature flags
+def build_tools_list():
+    """Build the tools list based on FEATURE_PART."""
+    # Part 1: Core agents (always included)
+    tools = [
         parser_agent_tool,
         security_agent_tool,
-        context_agent_tool,
         rootcause_agent_tool,
         fix_agent_tool,
-        
-        # Memory Operations
-        search_memory,
-        store_pattern,
-        store_session,
-        
-        # Stats Operations
-        record_stats,
-        get_trend,
-    ],
+    ]
+    
+    # Part 2: Advanced agents and features
+    if FEATURE_PART >= 2:
+        tools.extend([
+            context_agent_tool,  # GitHub, StackOverflow search
+            search_memory,       # Memory operations
+            store_pattern,
+            store_session,
+            record_stats,        # Statistics
+            get_trend,
+        ])
+        logger.info(f"🔧 Part 2 enabled: {len(tools)} tools loaded (including Memory, Context, Stats)")
+    else:
+        logger.info(f"🔧 Part 1 enabled: {len(tools)} tools loaded (core agents only)")
+    
+    return tools
+
+supervisor = Agent(
+    system_prompt=SUPERVISOR_PROMPT,
+    tools=build_tools_list(),
     callback_handler=event_loop_tracker
 )
 

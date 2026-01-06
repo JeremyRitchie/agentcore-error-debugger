@@ -117,7 +117,7 @@ resource "aws_iam_policy" "agentcore_runtime" {
           "bedrock-agentcore:GetMemoryEvents",
           "bedrock-agentcore:SearchMemory"
         ]
-        Resource = aws_bedrockagentcore_memory.main.arn
+        Resource = var.feature_part >= 2 ? aws_bedrockagentcore_memory.main[0].arn : "arn:aws:bedrock-agentcore:${local.region}:${local.account_id}:memory/*"
       },
       {
         Sid    = "AgentCoreGateway"
@@ -167,11 +167,13 @@ resource "aws_bedrockagentcore_agent_runtime" "main" {
   environment_variables = {
     AWS_REGION         = local.region
     AWS_DEFAULT_REGION = local.region
-    MEMORY_ID          = aws_bedrockagentcore_memory.main.id
+    MEMORY_ID          = var.feature_part >= 2 ? aws_bedrockagentcore_memory.main[0].id : ""
     GATEWAY_ID         = aws_bedrockagentcore_gateway.main.gateway_id
     LLM_MODEL_ID       = var.llm_model_id
     ENVIRONMENT        = var.environment
     LOG_LEVEL          = "INFO"
+    # Blog Series Feature Flag
+    FEATURE_PART       = tostring(var.feature_part)
   }
 
   tags = {

@@ -6,8 +6,62 @@ A **tool-diverse multi-agent system** for debugging errors, built on AWS Bedrock
 
 This is a technical demo for a two-part blog series on AWS AgentCore:
 
-- **Part 1**: Core agents (Parser, Security, Root Cause, Fix, Memory)
-- **Part 2**: Advanced features (Context APIs, Statistics, Long-term Learning)
+- **Part 1**: Core agents (Parser, Security, Root Cause, Fix) - Basic multi-agent system
+- **Part 2**: Advanced features (Memory, Context, Stats, GitHub integration, Live visualization)
+
+---
+
+## 🎛️ Feature Flags (Blog Post Parts)
+
+The codebase supports feature flags to deploy either Part 1 or Part 2 features:
+
+### Part 1: Basic Multi-Agent System
+```
+5 Agents: Supervisor, Parser, Security, Root Cause, Fix
+Lambda Tools: Parser, Security
+AWS Services: Comprehend, Bedrock Claude
+```
+
+### Part 2: Advanced Features (includes Part 1)
+```
+7 Agents: + Memory, Context, Stats
+AgentCore Memory: Session + Semantic storage
+GitHub Integration: Fetch code, create issues/PRs
+Live Architecture Visualization
+Activity Log
+```
+
+### How to Select
+
+**GitHub Actions:**
+```yaml
+# Workflow dispatch allows selecting Part 1 or 2
+workflow_dispatch:
+  inputs:
+    feature_part:
+      description: 'Blog Series Part (1=basic, 2=advanced)'
+      type: choice
+      options: ['1', '2']
+```
+
+**Terraform:**
+```hcl
+variable "feature_part" {
+  default = 2  # 1 or 2
+}
+```
+
+**Frontend (config.js):**
+```javascript
+window.AGENTCORE_CONFIG = {
+  part: 2,  // 1 or 2
+};
+```
+
+**Backend (environment variable):**
+```bash
+FEATURE_PART=2  # 1 or 2
+```
 
 ---
 

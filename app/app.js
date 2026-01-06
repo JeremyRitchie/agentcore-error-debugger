@@ -247,11 +247,15 @@ async function simulateAnalysis(errorText) {
     state.toolsUsed = 0;
     state.fetchedFiles = {};
     
-    // Get GitHub config from inputs
-    state.githubRepo = els.githubRepo?.value?.trim() || '';
-    state.githubBranch = els.githubBranch?.value?.trim() || 'main';
-    // Store PAT securely (only in memory, cleared on page unload)
-    SecureToken.set(els.githubPat?.value?.trim() || '');
+    // Get GitHub config from inputs (Part 2 only)
+    if (FEATURES.GITHUB_INTEGRATION_ENABLED) {
+        state.githubRepo = els.githubRepo?.value?.trim() || '';
+        state.githubBranch = els.githubBranch?.value?.trim() || 'main';
+        SecureToken.set(els.githubPat?.value?.trim() || '');
+    } else {
+        state.githubRepo = '';
+        state.githubBranch = 'main';
+    }
     state.createdIssue = null;
     state.createdPR = null;
     
@@ -260,103 +264,123 @@ async function simulateAnalysis(errorText) {
         security: null,
         memory: null,
         context: null,
-        codeContext: null,  // NEW: Code fetched from GitHub
+        codeContext: null,
         rootCause: null,
         fix: null,
         stats: null,
     };
     
-    // Activate frontend node briefly
-    activateNode('node-frontend');
-    await sleep(100);
-    deactivateNode('node-frontend');
+    // Activate frontend node briefly (Part 2 visualization)
+    if (FEATURES.LIVE_ARCHITECTURE_ENABLED) {
+        activateNode('node-frontend');
+        await sleep(100);
+        deactivateNode('node-frontend');
+    }
     
-    // 1. Supervisor starts
+    // 1. Supervisor starts (always)
     await runAgent('supervisor', 'Analyzing error...', 200);
     
-    // 2. Memory search (first!)
-    await runAgent('memory', 'Searching similar errors...', 300);
-    logMemoryOp('search_patterns');
-    state.toolsUsed += 1;
-    updateStats();
-    result.memory = searchMemory(errorText);
-    updateAgentOutput('memory', result.memory.count > 0 ? 
-        `Found ${result.memory.count} similar errors!` : 'No matches found');
+    // 2. Memory search - Part 2 only
+    if (FEATURES.MEMORY_ENABLED) {
+        await runAgent('memory', 'Searching similar errors...', 300);
+        logMemoryOp('search_patterns');
+        state.toolsUsed += 1;
+        updateStats();
+        result.memory = searchMemory(errorText);
+        updateAgentOutput('memory', result.memory.count > 0 ? 
+            `Found ${result.memory.count} similar errors!` : 'No matches found');
+    }
     
-    // 3. Parser - calls tools via Gateway → Lambda
+    // 3. Parser - always enabled (Part 1 core)
     await runAgent('parser', 'Parsing stack trace...', 400);
-    logToolCall('extract_stack_frames', 'Parser Lambda');
-    logToolCall('detect_language', 'Comprehend');
+    if (FEATURES.ACTIVITY_LOG_ENABLED) {
+        logToolCall('extract_stack_frames', 'Parser Lambda');
+        logToolCall('detect_language', 'Comprehend');
+    }
     state.toolsUsed += 4;
     updateStats();
     result.parsed = parseError(errorText);
     updateAgentOutput('parser', 
         `${result.parsed.language} | ${result.parsed.errorType}`);
     
-    // 4. Security - calls tools via Gateway → Lambda
+    // 4. Security - always enabled (Part 1 core)
     await runAgent('security', 'Scanning for PII/secrets...', 300);
-    logToolCall('detect_pii', 'Security Lambda → Comprehend');
-    logToolCall('detect_secrets', 'Security Lambda');
+    if (FEATURES.ACTIVITY_LOG_ENABLED) {
+        logToolCall('detect_pii', 'Security Lambda → Comprehend');
+        logToolCall('detect_secrets', 'Security Lambda');
+    }
     state.toolsUsed += 3;
     updateStats();
     result.security = scanSecurity(errorText);
     updateAgentOutput('security', 
         `Risk: ${result.security.riskLevel} | ${result.security.secretsFound} secrets`);
     
-    // 5. Context - now includes GitHub code fetching!
-    if (state.githubRepo) {
-        updateGithubStatus('loading', `Fetching code from ${state.githubRepo}...`);
-        await runAgent('context', 'Fetching code from GitHub...', 300);
-        logToolCall('fetch_code_context', 'GitHub API');
-        state.toolsUsed += 1;
+    // 5. Context Agent - Part 2 only (GitHub integration)
+    if (FEATURES.CONTEXT_AGENT_ENABLED) {
+        if (state.githubRepo && FEATURES.GITHUB_INTEGRATION_ENABLED) {
+            updateGithubStatus('loading', `Fetching code from ${state.githubRepo}...`);
+            await runAgent('context', 'Fetching code from GitHub...', 300);
+            logToolCall('fetch_code_context', 'GitHub API');
+            state.toolsUsed += 1;
+            updateStats();
+            result.codeContext = await fetchCodeFromStackTrace(errorText, result.parsed);
+            updateAgentOutput('context', 
+                `📂 ${result.codeContext.filesFound} files fetched`);
+            updateGithubStatus('connected', `✓ Connected to ${state.githubRepo}`);
+            await sleep(200);
+        }
+        
+        await runAgent('context', 'Searching GitHub Issues, StackOverflow...', 400);
+        logToolCall('search_github_issues', 'GitHub API');
+        logToolCall('search_stackoverflow', 'SO API');
+        state.toolsUsed += 2;
         updateStats();
-        result.codeContext = await fetchCodeFromStackTrace(errorText, result.parsed);
+        result.context = getContext(errorText, result.parsed);
         updateAgentOutput('context', 
-            `📂 ${result.codeContext.filesFound} files fetched`);
-        updateGithubStatus('connected', `✓ Connected to ${state.githubRepo}`);
-        await sleep(200);
+            state.githubRepo 
+                ? `📂 ${result.codeContext?.filesFound || 0} files | ${result.context.stackoverflowCount} SO answers`
+                : `${result.context.githubCount} issues, ${result.context.stackoverflowCount} answers`);
     }
     
-    await runAgent('context', 'Searching GitHub Issues, StackOverflow...', 400);
-    logToolCall('search_github_issues', 'GitHub API');
-    logToolCall('search_stackoverflow', 'SO API');
-    state.toolsUsed += 2;
-    updateStats();
-    result.context = getContext(errorText, result.parsed);
-    updateAgentOutput('context', 
-        state.githubRepo 
-            ? `📂 ${result.codeContext?.filesFound || 0} files | ${result.context.stackoverflowCount} SO answers`
-            : `${result.context.githubCount} issues, ${result.context.stackoverflowCount} answers`);
-    
-    // 6. Root Cause - uses Bedrock LLM
+    // 6. Root Cause - always enabled (Part 1 core)
     await runAgent('rootcause', 'Analyzing root cause...', 400);
-    logToolCall('analyze_with_llm', 'Bedrock Claude');
-    logToolCall('match_patterns', 'AgentCore Memory');
+    if (FEATURES.ACTIVITY_LOG_ENABLED) {
+        logToolCall('analyze_with_llm', 'Bedrock Claude');
+        if (FEATURES.MEMORY_ENABLED) {
+            logToolCall('match_patterns', 'AgentCore Memory');
+        }
+    }
     state.toolsUsed += 2;
     updateStats();
     result.rootCause = analyzeRootCause(errorText, result.parsed, result.codeContext);
     updateAgentOutput('rootcause', 
         `${result.rootCause.confidence}% confidence`);
     
-    // 7. Fix - uses Bedrock LLM
+    // 7. Fix - always enabled (Part 1 core)
     await runAgent('fix', 'Generating fix...', 500);
-    logToolCall('generate_code_fix', 'Bedrock Claude');
-    logToolCall('validate_syntax', 'AST Parser');
+    if (FEATURES.ACTIVITY_LOG_ENABLED) {
+        logToolCall('generate_code_fix', 'Bedrock Claude');
+        logToolCall('validate_syntax', 'AST Parser');
+    }
     state.toolsUsed += 3;
     updateStats();
     result.fix = generateFix(result.rootCause, result.parsed.language, result.codeContext);
     updateAgentOutput('fix', 
         `${result.fix.fixType} | Syntax valid`);
     
-    // 8. Stats
-    await runAgent('stats', 'Recording statistics...', 150);
-    logToolCall('record_occurrence', 'In-memory stats');
-    state.toolsUsed += 2;
-    updateStats();
-    result.stats = recordStats(result.parsed);
+    // 8. Stats Agent - Part 2 only
+    if (FEATURES.STATS_AGENT_ENABLED) {
+        await runAgent('stats', 'Recording statistics...', 150);
+        logToolCall('record_occurrence', 'In-memory stats');
+        state.toolsUsed += 2;
+        updateStats();
+        result.stats = recordStats(result.parsed);
+    }
     
-    // Store in memory
-    logMemoryOp('store_session_context');
+    // Store in memory - Part 2 only
+    if (FEATURES.MEMORY_ENABLED) {
+        logMemoryOp('store_session_context');
+    }
     
     return result;
 }
@@ -927,8 +951,8 @@ function displayResults(result) {
     
     let html = '';
     
-    // Memory match (if found)
-    if (result.memory.hasSolution) {
+    // Memory match (Part 2 only)
+    if (FEATURES.MEMORY_ENABLED && result.memory?.hasSolution) {
         html += `
             <div class="result-section memory fade-in">
                 <h3>🧠 Memory Match Found!</h3>
@@ -985,12 +1009,12 @@ function displayResults(result) {
     `;
     
     // Fix
-    const hasGitHub = state.githubRepo && SecureToken.hasToken();
+    const hasGitHub = FEATURES.GITHUB_INTEGRATION_ENABLED && state.githubRepo && SecureToken.hasToken();
     html += `
         <div class="result-section fix fade-in">
             <h3>🔧 Suggested Fix</h3>
             <span class="result-badge positive">${result.fix.fixType}</span>
-            ${result.fix.hasCodeContext ? `
+            ${result.fix.hasCodeContext && FEATURES.GITHUB_INTEGRATION_ENABLED ? `
                 <p class="result-text" style="margin-top: 8px">
                     <strong>📂 Source:</strong> <code>${result.fix.sourceFile}:${result.fix.sourceLine}</code>
                 </p>
@@ -1013,32 +1037,34 @@ function displayResults(result) {
                     </button>
                 </div>
                 <div class="github-action-status" id="githubActionStatus"></div>
-            ` : `
+            ` : FEATURES.GITHUB_INTEGRATION_ENABLED ? `
                 <p class="result-text hint" style="margin-top: 8px; font-size: 0.75rem; color: var(--text-muted);">
                     💡 Add a GitHub PAT to create issues/PRs directly
                 </p>
-            `}
+            ` : ''}
         </div>
     `;
     
-    // External Resources
-    html += `
-        <div class="result-section resources fade-in">
-            <h3>📚 External Resources</h3>
-            <p class="result-text">
-                Found ${result.context.githubCount} GitHub issues and ${result.context.stackoverflowCount} Stack Overflow answers.
-            </p>
-            <p class="result-text"><strong>Explanation:</strong> ${result.context.explanation}</p>
-            <div style="margin-top: 8px">
-                ${result.context.stackoverflowQuestions.map(q => `
-                    <a href="${q.url}" class="result-link">
-                        ${q.title}
-                        <span class="result-link-meta">Score: ${q.score} ${q.answered ? '✓' : ''}</span>
-                    </a>
-                `).join('')}
+    // External Resources (Part 2 only - Context Agent)
+    if (FEATURES.CONTEXT_AGENT_ENABLED && result.context) {
+        html += `
+            <div class="result-section resources fade-in">
+                <h3>📚 External Resources</h3>
+                <p class="result-text">
+                    Found ${result.context.githubCount} GitHub issues and ${result.context.stackoverflowCount} Stack Overflow answers.
+                </p>
+                <p class="result-text"><strong>Explanation:</strong> ${result.context.explanation}</p>
+                <div style="margin-top: 8px">
+                    ${result.context.stackoverflowQuestions.map(q => `
+                        <a href="${q.url}" class="result-link">
+                            ${q.title}
+                            <span class="result-link-meta">Score: ${q.score} ${q.answered ? '✓' : ''}</span>
+                        </a>
+                    `).join('')}
+                </div>
             </div>
-        </div>
-    `;
+        `;
+    }
     
     // Stats
     const execTime = ((Date.now() - state.startTime) / 1000).toFixed(1);
@@ -1048,8 +1074,8 @@ function displayResults(result) {
             <p class="result-text">
                 <strong>Agents Used:</strong> ${state.agentsUsed}<br>
                 <strong>Tool Calls:</strong> ${state.toolsUsed}<br>
-                <strong>Execution Time:</strong> ${execTime}s<br>
-                <strong>Trend:</strong> ${result.stats.trend}
+                <strong>Execution Time:</strong> ${execTime}s
+                ${FEATURES.STATS_AGENT_ENABLED && result.stats ? `<br><strong>Trend:</strong> ${result.stats.trend}` : ''}
             </p>
         </div>
     `;
@@ -1337,32 +1363,78 @@ function copyResults() {
 
 // ===== Initialization =====
 
+function applyFeatureFlags() {
+    // Update part badge in header
+    if (els.modeBadge) {
+        const partText = FEATURES.PART === 1 ? 'PART 1' : 'PART 2';
+        const modeText = CONFIG.demoMode ? 'DEMO' : 'LIVE';
+        els.modeBadge.textContent = `${partText} • ${modeText}`;
+        els.modeBadge.classList.toggle('live', !CONFIG.demoMode);
+    }
+    
+    // Hide Part 2 features if Part 1
+    const part2Elements = [
+        '.github-input',           // GitHub integration section
+        '.memory-panel',           // Memory panel at bottom
+        '#agent-memory',           // Memory agent in runtime
+        '#agent-context',          // Context agent in runtime
+        '#agent-stats',            // Stats agent in runtime
+        '.activity-log',           // Activity log
+        '.arch-flow-note',         // Flow explanation
+        '#node-memory',            // Memory service node
+        '#node-github',            // GitHub node
+    ];
+    
+    if (FEATURES.PART === 1) {
+        part2Elements.forEach(selector => {
+            const el = document.querySelector(selector);
+            if (el) el.style.display = 'none';
+        });
+        
+        // Update subtitle
+        const subtitle = document.querySelector('.subtitle');
+        if (subtitle) {
+            subtitle.textContent = 'Powered by AWS AgentCore • 5 Agents • 8+ Tools';
+        }
+    }
+    
+    console.log(`🎯 Feature flags applied: Part ${FEATURES.PART}`);
+}
+
 function init() {
     console.log('🔍 Error Debugger initializing...');
+    console.log(`📌 Running Part ${FEATURES.PART} features`);
     
     initElements();
+    
+    // Apply feature flags to UI
+    applyFeatureFlags();
     
     // Set session ID
     if (els.sessionId) {
         els.sessionId.textContent = CONFIG.sessionId;
     }
     
-    // Initialize memory display
-    updateMemoryDisplay();
+    // Initialize memory display (Part 2 only)
+    if (FEATURES.MEMORY_ENABLED) {
+        updateMemoryDisplay();
+    }
     
     // Event listeners
     els.analyzeBtn?.addEventListener('click', runAnalysis);
     els.loadSampleBtn?.addEventListener('click', loadSample);
     els.copyBtn?.addEventListener('click', copyResults);
     
-    // PAT visibility toggle
-    els.togglePatBtn?.addEventListener('click', () => {
-        if (els.githubPat) {
-            const isPassword = els.githubPat.type === 'password';
-            els.githubPat.type = isPassword ? 'text' : 'password';
-            els.togglePatBtn.textContent = isPassword ? '🙈' : '👁';
-        }
-    });
+    // PAT visibility toggle (Part 2 only)
+    if (FEATURES.GITHUB_INTEGRATION_ENABLED) {
+        els.togglePatBtn?.addEventListener('click', () => {
+            if (els.githubPat) {
+                const isPassword = els.githubPat.type === 'password';
+                els.githubPat.type = isPassword ? 'text' : 'password';
+                els.togglePatBtn.textContent = isPassword ? '🙈' : '👁';
+            }
+        });
+    }
     
     // Keyboard shortcut
     document.addEventListener('keydown', (e) => {

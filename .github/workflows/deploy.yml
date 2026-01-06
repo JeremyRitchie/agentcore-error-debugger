@@ -18,6 +18,14 @@ on:
         options:
           - deploy
           - destroy
+      feature_part:
+        description: 'Blog Series Part (1=basic, 2=advanced with memory/github)'
+        required: true
+        default: '2'
+        type: choice
+        options:
+          - '1'
+          - '2'
 
 permissions:
   id-token: write
@@ -27,9 +35,11 @@ env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   PROJECT_NAME: ${{ vars.PROJECT_NAME || 'error-debugger' }}
   ENVIRONMENT: ${{ vars.ENVIRONMENT || 'prod' }}
+  FEATURE_PART: ${{ github.event.inputs.feature_part || '2' }}
   TF_VAR_project_name: ${{ vars.PROJECT_NAME || 'error-debugger' }}
   TF_VAR_environment: ${{ vars.ENVIRONMENT || 'prod' }}
   TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_VAR_feature_part: ${{ github.event.inputs.feature_part || '2' }}
 
 jobs:
   deploy:
@@ -112,21 +122,27 @@ jobs:
           echo "cloudfront_id=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_OUTPUT
           echo "runtime_id=$(terraform output -raw runtime_id)" >> $GITHUB_OUTPUT
           echo "gateway_url=$(terraform output -raw gateway_endpoint)" >> $GITHUB_OUTPUT
-          echo "memory_id=$(terraform output -raw memory_id)" >> $GITHUB_OUTPUT
+          # Memory is only created in Part 2
+          MEMORY_ID=$(terraform output -raw memory_id 2>/dev/null || echo "")
+          echo "memory_id=${MEMORY_ID}" >> $GITHUB_OUTPUT
           echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
       
       # ===== Deploy Frontend =====
       - name: Deploy Frontend
         run: |
-          # Create runtime config
+          # Create runtime config with feature flags
           cat > app/config.js << EOF
           window.AGENTCORE_CONFIG = {
             gatewayUrl: '${{ steps.tf-outputs.outputs.gateway_url }}',
             runtimeId: '${{ steps.tf-outputs.outputs.runtime_id }}',
             memoryId: '${{ steps.tf-outputs.outputs.memory_id }}',
             demoMode: false,
+            // Blog Series Feature Flag
+            part: ${{ env.FEATURE_PART }},
           };
           EOF
+          
+          echo "🎯 Deploying Part ${{ env.FEATURE_PART }} features"
           
           # Sync static assets with long cache
           aws s3 sync app/ s3://${{ steps.tf-outputs.outputs.s3_bucket }}/ \
@@ -154,12 +170,22 @@ jobs:
         run: |
           echo "## 🐛 Error Debugger Deployed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ env.FEATURE_PART }}" == "1" ]; then
+            echo "### 📝 Part 1: Basic Multi-Agent System" >> $GITHUB_STEP_SUMMARY
+            echo "5 agents (Parser, Security, Root Cause, Fix, Supervisor) | Lambda tools | Bedrock" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 📝 Part 2: Advanced Features" >> $GITHUB_STEP_SUMMARY
+            echo "7 agents + Memory + GitHub Integration + Live Visualization" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "### AgentCore Resources" >> $GITHUB_STEP_SUMMARY
           echo "| Resource | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Runtime | \`${{ steps.tf-outputs.outputs.runtime_id }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Gateway | \`${{ steps.tf-outputs.outputs.gateway_url }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Memory | \`${{ steps.tf-outputs.outputs.memory_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ env.FEATURE_PART }}" == "2" ]; then
+            echo "| Memory | \`${{ steps.tf-outputs.outputs.memory_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🌐 Website" >> $GITHUB_STEP_SUMMARY
           echo "[${{ steps.tf-outputs.outputs.website_url }}](${{ steps.tf-outputs.outputs.website_url }})" >> $GITHUB_STEP_SUMMARY

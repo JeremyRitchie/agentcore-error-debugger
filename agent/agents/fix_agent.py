@@ -1,6 +1,8 @@
 """
 Fix Agent - Generates code fixes and validates solutions
 Tools: Bedrock code generation, syntax validation
+
+Uses Bedrock Claude in live mode, template-based fixes in demo mode.
 """
 import re
 import ast
@@ -10,13 +12,18 @@ import boto3
 from typing import Dict, Any, List
 from strands import Agent, tool
 
+from .config import DEMO_MODE, AWS_REGION
+
 logger = logging.getLogger(__name__)
 
-# Initialize Bedrock client
-try:
-    bedrock_runtime = boto3.client('bedrock-runtime')
-except Exception:
-    bedrock_runtime = None
+# Initialize Bedrock client (only in live mode)
+bedrock_runtime = None
+if not DEMO_MODE:
+    try:
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=AWS_REGION)
+        logger.info("✅ Bedrock runtime client initialized for code generation")
+    except Exception as e:
+        logger.warning(f"⚠️ Bedrock client init failed: {e}")
 
 # =============================================================================
 # FIX TEMPLATES - Common fix patterns

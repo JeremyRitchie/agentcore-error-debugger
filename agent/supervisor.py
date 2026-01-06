@@ -9,6 +9,10 @@ fixes, memory, and statistics.
 BLOG SERIES FEATURE FLAGS:
 - Part 1: Basic multi-agent system (5 agents: Supervisor, Parser, Security, Root Cause, Fix)
 - Part 2: Advanced features (All 7 agents + Memory, Context, Stats)
+
+DEMO MODE:
+- DEMO_MODE=true: Use simulated responses (for local testing)
+- DEMO_MODE=false: Use real AWS APIs (for production)
 """
 import os
 import sys
@@ -19,10 +23,13 @@ from strands.models import BedrockModel
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 # ============================================================================
-# Feature Flags - Blog Post Parts
+# Configuration
 # ============================================================================
-# Set via environment variable: FEATURE_PART=1 or FEATURE_PART=2
+# Feature part (1 = basic, 2 = advanced)
 FEATURE_PART = int(os.environ.get('FEATURE_PART', '2'))
+
+# Demo mode (true = simulated, false = real APIs)
+DEMO_MODE = os.environ.get('DEMO_MODE', 'true').lower() in ('true', '1', 'yes')
 
 # Part 1 agents (always imported)
 from agents import (
@@ -94,6 +101,14 @@ def setup_logging():
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+# Log startup configuration
+logger.info("=" * 60)
+logger.info("🐛 Error Debugger Agent Starting")
+logger.info(f"   Mode: {'DEMO' if DEMO_MODE else 'LIVE'}")
+logger.info(f"   Feature Part: {FEATURE_PART}")
+logger.info(f"   Agents: {'7 (full)' if FEATURE_PART >= 2 else '5 (core)'}")
+logger.info("=" * 60)
 
 # ============================================================================
 # Tool Execution Callback

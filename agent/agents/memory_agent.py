@@ -1,6 +1,8 @@
 """
 Memory Agent - Manages conversation memory using AgentCore Memory API
 Stores error patterns, solutions, and learns from past debugging sessions
+
+Uses real AgentCore Memory API in production, local storage in demo mode.
 """
 import os
 import boto3
@@ -11,16 +13,21 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from strands import Agent, tool
 
+from .config import DEMO_MODE, MEMORY_ID as CONFIG_MEMORY_ID
+
 logger = logging.getLogger(__name__)
 
-# Initialize Bedrock AgentCore client
-try:
-    bedrock_agentcore = boto3.client('bedrock-agentcore')
-except Exception:
-    bedrock_agentcore = None
+# Initialize Bedrock AgentCore client (only in live mode)
+bedrock_agentcore = None
+if not DEMO_MODE:
+    try:
+        bedrock_agentcore = boto3.client('bedrock-agentcore')
+        logger.info("✅ AgentCore Memory client initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ AgentCore client init failed: {e}")
 
-# Memory configuration from environment
-MEMORY_ID = os.environ.get('MEMORY_ID', '')
+# Memory configuration
+MEMORY_ID = CONFIG_MEMORY_ID or os.environ.get('MEMORY_ID', '')
 SESSION_ID = os.environ.get('SESSION_ID', 'default-session')
 
 
@@ -96,17 +103,34 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
     Returns:
         JSON with matching past errors and their solutions
     """
-    logger.info(f"🔎 Searching for similar errors...")
+    logger.info(f"🔎 Searching for similar errors... (mode: {'DEMO' if DEMO_MODE else 'LIVE'})")
+    
+    # Use local search in demo mode
+    if DEMO_MODE:
+        logger.info("📦 Demo mode: Using local memory search")
+        results = _local_search(error_text)[:limit]
+        return json.dumps({
+            "success": True,
+            "memory_type": "LONG-TERM (local)",
+            "query": error_text[:100],
+            "count": len(results),
+            "results": results,
+            "has_solutions": len(results) > 0,
+            "mode": "demo"
+        })
     
     try:
         if not MEMORY_ID or not bedrock_agentcore:
-            logger.warning("Memory not configured, returning empty results")
+            logger.warning("Memory not configured, using local fallback")
+            results = _local_search(error_text)[:limit]
             return json.dumps({
                 "success": True,
-                "memory_type": "LONG-TERM (Semantic)",
+                "memory_type": "LONG-TERM (local)",
                 "query": error_text[:100],
-                "results": [],
-                "message": "No long-term memory configured"
+                "count": len(results),
+                "results": results,
+                "has_solutions": len(results) > 0,
+                "message": "No long-term memory configured, using local"
             })
         
         # Use AgentCore semantic search
@@ -285,6 +309,11 @@ def increment_solution_success(error_signature: str) -> str:
 
 def _store_to_agentcore(event_data: Dict[str, Any], memory_type: str) -> Dict[str, Any]:
     """Store event to AgentCore Memory."""
+    # Use local storage in demo mode
+    if DEMO_MODE:
+        logger.info("📦 Demo mode: Using local memory storage")
+        return _local_store(event_data, memory_type)
+    
     try:
         if not MEMORY_ID or not bedrock_agentcore:
             logger.warning("MEMORY_ID not configured, using local fallback")
@@ -300,6 +329,7 @@ def _store_to_agentcore(event_data: Dict[str, Any], memory_type: str) -> Dict[st
             "memory_type": "LONG-TERM" if memory_type == MemoryType.SEMANTIC else "SHORT-TERM",
             "memory_id": MEMORY_ID[:8] + "...",
             "event_id": response.get('eventId', 'unknown'),
+            "mode": "live"
         }
         
     except Exception as e:

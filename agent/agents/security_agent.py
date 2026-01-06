@@ -1,6 +1,8 @@
 """
 Security Agent - Detects and redacts sensitive information in errors
 Tools: PII detection (Comprehend), secret scanning (regex), redaction
+
+Uses real AWS Comprehend in production, regex fallback in demo mode.
 """
 import re
 import json
@@ -9,13 +11,18 @@ import boto3
 from typing import Dict, Any, List
 from strands import Agent, tool
 
+from .config import DEMO_MODE, AWS_REGION
+
 logger = logging.getLogger(__name__)
 
-# Initialize AWS client
-try:
-    comprehend_client = boto3.client('comprehend')
-except Exception:
-    comprehend_client = None
+# Initialize AWS client (only in live mode for Comprehend)
+comprehend_client = None
+if not DEMO_MODE:
+    try:
+        comprehend_client = boto3.client('comprehend', region_name=AWS_REGION)
+        logger.info("✅ Comprehend client initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Comprehend client init failed: {e}")
 
 # =============================================================================
 # SECRET PATTERNS - For detecting hardcoded secrets
@@ -54,7 +61,12 @@ def detect_pii(text: str) -> str:
     Returns:
         JSON with detected PII entities
     """
-    logger.info(f"🔒 Scanning for PII in {len(text)} chars")
+    logger.info(f"🔒 Scanning for PII in {len(text)} chars [mode: {'DEMO' if DEMO_MODE else 'LIVE'}]")
+    
+    # Use regex fallback in demo mode
+    if DEMO_MODE:
+        logger.info("📦 Demo mode: Using regex PII detection")
+        return _detect_pii_regex(text)
     
     if not comprehend_client:
         logger.warning("Comprehend client not available, using regex fallback")

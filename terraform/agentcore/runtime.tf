@@ -174,6 +174,8 @@ resource "aws_bedrockagentcore_agent_runtime" "main" {
     LOG_LEVEL          = "INFO"
     # Blog Series Feature Flag
     FEATURE_PART       = tostring(var.feature_part)
+    # Demo mode: false in production (uses real APIs)
+    DEMO_MODE          = "false"
   }
 
   tags = {

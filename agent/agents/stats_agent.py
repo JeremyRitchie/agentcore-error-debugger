@@ -1,19 +1,37 @@
 """
 Stats Agent - Tracks error statistics and trends
 Tools: Frequency calculation, trend detection, analytics
+
+In demo mode, uses in-memory storage with pre-seeded data.
+In live mode, uses DynamoDB for persistent statistics.
 """
+import os
 import json
 import logging
+import boto3
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
 from collections import defaultdict
 from strands import Agent, tool
 
+from .config import DEMO_MODE, AWS_REGION
+
 logger = logging.getLogger(__name__)
 
+# DynamoDB table name (for live mode)
+STATS_TABLE = os.environ.get('STATS_TABLE', 'error-debugger-stats')
+
+# Initialize DynamoDB client (only in live mode)
+dynamodb = None
+if not DEMO_MODE:
+    try:
+        dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+        logger.info("✅ DynamoDB client initialized for stats")
+    except Exception as e:
+        logger.warning(f"⚠️ DynamoDB init failed: {e}")
+
 # =============================================================================
-# IN-MEMORY STATS STORAGE (for demo)
-# In production, this would use a proper database
+# IN-MEMORY STATS STORAGE (used in demo mode or as fallback)
 # =============================================================================
 
 _error_history: List[Dict[str, Any]] = []
@@ -25,16 +43,17 @@ _session_stats: Dict[str, Any] = {
     "session_start": datetime.utcnow().isoformat()
 }
 
-# Pre-seed with some historical data for demo
-_error_history.extend([
-    {"type": "null_reference", "language": "javascript", "timestamp": (datetime.utcnow() - timedelta(days=7)).isoformat(), "resolved": True},
-    {"type": "null_reference", "language": "javascript", "timestamp": (datetime.utcnow() - timedelta(days=6)).isoformat(), "resolved": True},
-    {"type": "import_error", "language": "python", "timestamp": (datetime.utcnow() - timedelta(days=5)).isoformat(), "resolved": True},
-    {"type": "type_error", "language": "typescript", "timestamp": (datetime.utcnow() - timedelta(days=4)).isoformat(), "resolved": True},
-    {"type": "null_reference", "language": "javascript", "timestamp": (datetime.utcnow() - timedelta(days=3)).isoformat(), "resolved": True},
-    {"type": "connection_error", "language": "python", "timestamp": (datetime.utcnow() - timedelta(days=2)).isoformat(), "resolved": False},
-    {"type": "null_reference", "language": "javascript", "timestamp": (datetime.utcnow() - timedelta(days=1)).isoformat(), "resolved": True},
-])
+# Pre-seed with historical data (for demo mode)
+if DEMO_MODE:
+    _error_history.extend([
+        {"type": "null_reference", "language": "javascript", "timestamp": (datetime.utcnow() - timedelta(days=7)).isoformat(), "resolved": True},
+        {"type": "null_reference", "language": "javascript", "timestamp": (datetime.utcnow() - timedelta(days=6)).isoformat(), "resolved": True},
+        {"type": "import_error", "language": "python", "timestamp": (datetime.utcnow() - timedelta(days=5)).isoformat(), "resolved": True},
+        {"type": "type_error", "language": "typescript", "timestamp": (datetime.utcnow() - timedelta(days=4)).isoformat(), "resolved": True},
+        {"type": "null_reference", "language": "javascript", "timestamp": (datetime.utcnow() - timedelta(days=3)).isoformat(), "resolved": True},
+        {"type": "connection_error", "language": "python", "timestamp": (datetime.utcnow() - timedelta(days=2)).isoformat(), "resolved": False},
+        {"type": "null_reference", "language": "javascript", "timestamp": (datetime.utcnow() - timedelta(days=1)).isoformat(), "resolved": True},
+    ])
 
 
 # =============================================================================
@@ -206,9 +225,11 @@ def record_error_analyzed(error_type: str, language: str, resolution_time: float
     Returns:
         JSON confirmation
     """
-    logger.info(f"📝 Recording error: {error_type} ({language})")
+    logger.info(f"📝 Recording error: {error_type} ({language}) [mode: {'DEMO' if DEMO_MODE else 'LIVE'}]")
     
-    # Update session stats
+    timestamp = datetime.utcnow().isoformat()
+    
+    # Update in-memory session stats (always)
     _session_stats["total_errors"] += 1
     _session_stats["errors_by_type"][error_type] += 1
     _session_stats["errors_by_language"][language] += 1
@@ -216,20 +237,40 @@ def record_error_analyzed(error_type: str, language: str, resolution_time: float
     if resolution_time > 0:
         _session_stats["resolution_times"].append(resolution_time)
     
-    # Add to history
-    _error_history.append({
+    error_record = {
         "type": error_type,
         "language": language,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": timestamp,
         "resolved": resolution_time > 0,
         "resolution_time": resolution_time
-    })
+    }
+    
+    # Add to in-memory history
+    _error_history.append(error_record)
+    
+    # In live mode, also persist to DynamoDB
+    if not DEMO_MODE and dynamodb:
+        try:
+            table = dynamodb.Table(STATS_TABLE)
+            table.put_item(Item={
+                'pk': f"ERROR#{error_type}",
+                'sk': timestamp,
+                'error_type': error_type,
+                'language': language,
+                'resolved': resolution_time > 0,
+                'resolution_time': int(resolution_time * 1000),  # milliseconds
+                'ttl': int((datetime.utcnow() + timedelta(days=90)).timestamp())
+            })
+            logger.info("✅ Persisted to DynamoDB")
+        except Exception as e:
+            logger.warning(f"⚠️ DynamoDB write failed: {e}")
     
     result = {
         "success": True,
         "error_type": error_type,
         "language": language,
-        "session_total": _session_stats["total_errors"]
+        "session_total": _session_stats["total_errors"],
+        "mode": "demo" if DEMO_MODE else "live"
     }
     
     logger.info(f"✅ Recorded. Session total: {_session_stats['total_errors']}")

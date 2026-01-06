@@ -54,14 +54,49 @@ variable "feature_part" {
 **Frontend (config.js):**
 ```javascript
 window.AGENTCORE_CONFIG = {
-  part: 2,  // 1 or 2
+  part: 2,       // 1 or 2
+  demoMode: true // true = simulated, false = real APIs
 };
 ```
 
-**Backend (environment variable):**
+**Backend (environment variables):**
 ```bash
-FEATURE_PART=2  # 1 or 2
+FEATURE_PART=2    # 1 or 2
+DEMO_MODE=false   # true = simulated, false = real APIs
 ```
+
+---
+
+## 🔌 Demo Mode vs Live Mode
+
+The codebase supports two operational modes:
+
+### Demo Mode (`DEMO_MODE=true`)
+- **Default for local development**
+- Uses simulated API responses
+- Pre-seeded memory patterns
+- No AWS credentials required
+- Works completely offline
+
+### Live Mode (`DEMO_MODE=false`)
+- **Default when deployed via Terraform**
+- Real AWS Comprehend for PII detection
+- Real Bedrock Claude for LLM reasoning
+- Real GitHub/StackOverflow API calls
+- Real AgentCore Memory for persistence
+- Real DynamoDB for statistics
+
+### What Changes by Mode
+
+| Component | Demo Mode | Live Mode |
+|-----------|-----------|-----------|
+| **Parser Agent** | Regex patterns | Regex + Comprehend |
+| **Security Agent** | Regex PII detection | AWS Comprehend PII |
+| **Context Agent** | Simulated GitHub/SO | Real API calls |
+| **Root Cause Agent** | Pattern matching | Bedrock Claude |
+| **Fix Agent** | Templates | Bedrock Claude |
+| **Memory Agent** | Local in-memory | AgentCore Memory |
+| **Stats Agent** | In-memory | DynamoDB |
 
 ---
 

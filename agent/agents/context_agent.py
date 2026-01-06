@@ -1,18 +1,21 @@
 """
 Context Agent - Searches external resources for error context
 Tools: GitHub Issues API, Stack Overflow API, documentation fetching
+
+Uses real API calls in production, simulated responses in demo mode.
 """
 import re
 import json
 import logging
 import urllib.parse
+import urllib.request
 from typing import Dict, Any, List
 from strands import Agent, tool
 
+from .config import DEMO_MODE, GITHUB_TOKEN, GITHUB_API_URL, STACKOVERFLOW_API_KEY, STACKOVERFLOW_API_URL
+
 logger = logging.getLogger(__name__)
 
-# Note: In production, these would make real HTTP calls
-# For demo purposes, we simulate the responses
 
 # =============================================================================
 # TOOLS - External API calls
@@ -37,20 +40,23 @@ def search_github_issues(error_message: str, language: str = "") -> str:
     key_terms = _extract_search_terms(error_message)
     query = " ".join(key_terms[:5])
     
-    # Simulate GitHub Issues API response
-    # In production: GET https://api.github.com/search/issues?q={query}
-    
-    simulated_issues = _get_simulated_github_results(error_message, language)
+    if DEMO_MODE:
+        logger.info("📦 Demo mode: Using simulated GitHub results")
+        issues = _get_simulated_github_results(error_message, language)
+    else:
+        logger.info("🌐 Live mode: Calling GitHub API")
+        issues = _call_github_api(query, language)
     
     result = {
         "query": query,
-        "total_count": len(simulated_issues),
-        "issues": simulated_issues[:5],
+        "total_count": len(issues),
+        "issues": issues[:5],
         "source": "github_issues",
-        "search_url": f"https://github.com/search?q={urllib.parse.quote(query)}&type=issues"
+        "search_url": f"https://github.com/search?q={urllib.parse.quote(query)}&type=issues",
+        "mode": "demo" if DEMO_MODE else "live"
     }
     
-    logger.info(f"✅ Found {len(simulated_issues)} GitHub issues")
+    logger.info(f"✅ Found {len(issues)} GitHub issues")
     return json.dumps(result)
 
 
@@ -72,20 +78,23 @@ def search_stackoverflow(error_message: str, tags: str = "") -> str:
     key_terms = _extract_search_terms(error_message)
     query = " ".join(key_terms[:5])
     
-    # Simulate Stack Overflow API response
-    # In production: GET https://api.stackexchange.com/2.3/search/advanced?q={query}
-    
-    simulated_questions = _get_simulated_stackoverflow_results(error_message, tags)
+    if DEMO_MODE:
+        logger.info("📦 Demo mode: Using simulated Stack Overflow results")
+        questions = _get_simulated_stackoverflow_results(error_message, tags)
+    else:
+        logger.info("🌐 Live mode: Calling Stack Overflow API")
+        questions = _call_stackoverflow_api(query, tags)
     
     result = {
         "query": query,
-        "total_count": len(simulated_questions),
-        "questions": simulated_questions[:5],
+        "total_count": len(questions),
+        "questions": questions[:5],
         "source": "stackoverflow",
-        "search_url": f"https://stackoverflow.com/search?q={urllib.parse.quote(query)}"
+        "search_url": f"https://stackoverflow.com/search?q={urllib.parse.quote(query)}",
+        "mode": "demo" if DEMO_MODE else "live"
     }
     
-    logger.info(f"✅ Found {len(simulated_questions)} Stack Overflow questions")
+    logger.info(f"✅ Found {len(questions)} Stack Overflow questions")
     return json.dumps(result)
 
 
@@ -104,7 +113,7 @@ def fetch_documentation(error_type: str, language: str) -> str:
     """
     logger.info(f"📚 Fetching docs for {error_type} in {language}")
     
-    # Documentation mapping
+    # Documentation mapping (this is static, no API needed)
     doc_links = _get_documentation_links(error_type, language)
     
     result = {
@@ -234,6 +243,105 @@ def get_error_explanation(error_type: str, language: str) -> str:
 
 
 # =============================================================================
+# REAL API CALLS (used when DEMO_MODE=false)
+# =============================================================================
+
+def _call_github_api(query: str, language: str = "") -> List[Dict]:
+    """Call the real GitHub Issues API."""
+    try:
+        # Build search query
+        search_query = query
+        if language:
+            search_query += f" language:{language}"
+        search_query += " is:issue"
+        
+        url = f"{GITHUB_API_URL}/search/issues?q={urllib.parse.quote(search_query)}&sort=updated&order=desc&per_page=10"
+        
+        headers = {
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'ErrorDebugger/1.0'
+        }
+        if GITHUB_TOKEN:
+            headers['Authorization'] = f'Bearer {GITHUB_TOKEN}'
+        
+        request = urllib.request.Request(url, headers=headers)
+        
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        
+        issues = []
+        for item in data.get('items', [])[:10]:
+            issues.append({
+                "title": item.get('title', ''),
+                "url": item.get('html_url', ''),
+                "state": item.get('state', ''),
+                "comments": item.get('comments', 0),
+                "created_at": item.get('created_at', '')[:10],
+                "labels": [label.get('name', '') for label in item.get('labels', [])[:3]],
+                "repository": item.get('repository_url', '').split('/')[-1] if item.get('repository_url') else ''
+            })
+        
+        logger.info(f"✅ GitHub API returned {len(issues)} issues")
+        return issues
+        
+    except Exception as e:
+        logger.error(f"❌ GitHub API error: {str(e)}")
+        # Fall back to simulated results on error
+        return _get_simulated_github_results(query, language)
+
+
+def _call_stackoverflow_api(query: str, tags: str = "") -> List[Dict]:
+    """Call the real Stack Overflow API."""
+    try:
+        # Build API URL
+        params = {
+            'order': 'desc',
+            'sort': 'relevance',
+            'intitle': query[:100],  # Stack Overflow has title length limits
+            'site': 'stackoverflow',
+            'pagesize': 10
+        }
+        if tags:
+            params['tagged'] = tags.replace(',', ';')
+        if STACKOVERFLOW_API_KEY:
+            params['key'] = STACKOVERFLOW_API_KEY
+        
+        query_string = urllib.parse.urlencode(params)
+        url = f"{STACKOVERFLOW_API_URL}/search/advanced?{query_string}"
+        
+        headers = {
+            'Accept': 'application/json',
+            'User-Agent': 'ErrorDebugger/1.0'
+        }
+        
+        request = urllib.request.Request(url, headers=headers)
+        
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        
+        questions = []
+        for item in data.get('items', [])[:10]:
+            questions.append({
+                "title": item.get('title', ''),
+                "url": item.get('link', ''),
+                "score": item.get('score', 0),
+                "answer_count": item.get('answer_count', 0),
+                "is_answered": item.get('is_answered', False),
+                "accepted_answer_id": item.get('accepted_answer_id'),
+                "tags": item.get('tags', [])[:5],
+                "view_count": item.get('view_count', 0)
+            })
+        
+        logger.info(f"✅ Stack Overflow API returned {len(questions)} questions")
+        return questions
+        
+    except Exception as e:
+        logger.error(f"❌ Stack Overflow API error: {str(e)}")
+        # Fall back to simulated results on error
+        return _get_simulated_stackoverflow_results(query, tags)
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -254,10 +362,7 @@ def _extract_search_terms(text: str) -> List[str]:
 
 
 def _get_simulated_github_results(error_message: str, language: str) -> List[Dict]:
-    """Simulate GitHub Issues API results."""
-    # In production, this would make real API calls
-    # For demo, return relevant-looking simulated results
-    
+    """Simulate GitHub Issues API results (for demo mode)."""
     error_lower = error_message.lower()
     
     results = []
@@ -306,7 +411,7 @@ def _get_simulated_github_results(error_message: str, language: str) -> List[Dic
 
 
 def _get_simulated_stackoverflow_results(error_message: str, tags: str) -> List[Dict]:
-    """Simulate Stack Overflow API results."""
+    """Simulate Stack Overflow API results (for demo mode)."""
     error_lower = error_message.lower()
     
     results = []
@@ -377,12 +482,30 @@ def _get_documentation_links(error_type: str, language: str) -> List[Dict]:
             "url": "https://go.dev/blog/error-handling-and-go",
             "type": "official"
         })
+    elif language == "rust":
+        docs.append({
+            "title": "Rust Error Handling",
+            "url": "https://doc.rust-lang.org/book/ch09-00-error-handling.html",
+            "type": "official"
+        })
+    elif language == "java":
+        docs.append({
+            "title": "Java Exceptions Tutorial",
+            "url": "https://docs.oracle.com/javase/tutorial/essential/exceptions/",
+            "type": "official"
+        })
     
     # Error type specific
     if error_type == "null_reference":
         docs.append({
             "title": "Handling Null Reference Errors",
-            "url": "https://example.com/null-reference-guide",
+            "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Errors/Cant_access_property",
+            "type": "guide"
+        })
+    elif error_type == "type_error":
+        docs.append({
+            "title": "Understanding Type Errors",
+            "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypeError",
             "type": "guide"
         })
     
@@ -447,7 +570,7 @@ def research(error_message: str, error_type: str = "unknown", language: str = "u
     Returns:
         Dict with research results
     """
-    logger.info(f"🔬 ContextAgent: Researching error context")
+    logger.info(f"🔬 ContextAgent: Researching error context (mode: {'DEMO' if DEMO_MODE else 'LIVE'})")
     
     try:
         prompt = f"""Research this error:
@@ -491,7 +614,8 @@ def _direct_research(error_message: str, error_type: str, language: str) -> Dict
             "documentation": docs_result.get("documentation", []),
             "explanation": explanation.get("explanation", {}),
             "total_resources": github_result.get("total_count", 0) + so_result.get("total_count", 0),
-            "has_solutions": so_result.get("total_count", 0) > 0
+            "has_solutions": so_result.get("total_count", 0) > 0,
+            "mode": "demo" if DEMO_MODE else "live"
         }
     except Exception as e:
         return {
@@ -503,4 +627,3 @@ def _direct_research(error_message: str, error_type: str, language: str) -> Dict
             "has_solutions": False,
             "error": str(e)
         }
-

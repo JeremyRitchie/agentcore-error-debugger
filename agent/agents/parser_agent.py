@@ -1,6 +1,9 @@
 """
 Parser Agent - Extracts structured information from error messages
 Tools: Regex-based parsing, language detection, error classification
+
+Uses regex-based parsing for stack traces and error classification.
+Language detection uses Comprehend in live mode, regex patterns in demo mode.
 """
 import re
 import json
@@ -9,13 +12,18 @@ import boto3
 from typing import Dict, Any, List
 from strands import Agent, tool
 
+from .config import DEMO_MODE, AWS_REGION
+
 logger = logging.getLogger(__name__)
 
-# Initialize AWS client for language detection
-try:
-    comprehend_client = boto3.client('comprehend')
-except Exception:
-    comprehend_client = None
+# Initialize AWS client for language detection (only in live mode)
+comprehend_client = None
+if not DEMO_MODE:
+    try:
+        comprehend_client = boto3.client('comprehend', region_name=AWS_REGION)
+        logger.info("✅ Comprehend client initialized for language detection")
+    except Exception as e:
+        logger.warning(f"⚠️ Comprehend client init failed: {e}")
 
 # =============================================================================
 # ERROR PATTERNS - For classification

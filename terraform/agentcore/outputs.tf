@@ -9,8 +9,8 @@ output "agentcore_config" {
     gateway_id       = aws_bedrockagentcore_gateway.main.gateway_id
     gateway_arn      = aws_bedrockagentcore_gateway.main.gateway_arn
     gateway_url      = aws_bedrockagentcore_gateway.main.gateway_url
-    memory_id        = aws_bedrockagentcore_memory.main.id
-    memory_arn       = aws_bedrockagentcore_memory.main.arn
+    memory_id        = var.feature_part >= 2 ? aws_bedrockagentcore_memory.main[0].id : null
+    memory_arn       = var.feature_part >= 2 ? aws_bedrockagentcore_memory.main[0].arn : null
     tool_lambdas = {
       parser   = aws_lambda_function.parser.arn
       security = aws_lambda_function.security.arn

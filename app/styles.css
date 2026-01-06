@@ -799,6 +799,383 @@ body {
     background: var(--text-muted);
 }
 
+/* ===== Interactive Architecture Diagram ===== */
+.arch-container {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+}
+
+.arch-diagram {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    height: 100%;
+}
+
+/* Clean Layout */
+.arch-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+}
+
+.arch-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.arch-arrow {
+    color: var(--accent-blue);
+    font-size: 1rem;
+    font-weight: bold;
+}
+
+.arch-connector {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    padding: 2px 0;
+}
+
+.arch-connector.vertical {
+    color: var(--accent-blue);
+}
+
+/* Architecture Nodes */
+.arch-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    transition: all 0.2s ease;
+    min-width: 70px;
+    text-align: center;
+}
+
+.arch-node:hover {
+    border-color: var(--accent-blue);
+    transform: translateY(-1px);
+}
+
+.arch-node.active {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 12px rgba(88, 166, 255, 0.3);
+}
+
+.arch-node .node-icon {
+    font-size: 1rem;
+}
+
+.arch-node .node-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.arch-node .node-sub {
+    font-size: 0.55rem;
+    color: var(--text-muted);
+}
+
+/* Node type styles */
+.arch-node.frontend {
+    border-top: 2px solid var(--accent-blue);
+}
+
+.arch-node.gateway {
+    border-top: 2px solid var(--accent-green);
+    background: linear-gradient(180deg, rgba(63, 185, 80, 0.1), transparent);
+}
+
+.arch-node.lambda {
+    border-top: 2px solid var(--accent-orange);
+    background: linear-gradient(180deg, rgba(210, 153, 34, 0.1), transparent);
+}
+
+.arch-node.aws-service {
+    border-top: 2px solid var(--accent-orange);
+}
+
+.arch-node.external {
+    border-top: 2px solid var(--text-muted);
+}
+
+.arch-node.memory-service {
+    border-top: 2px solid var(--accent-purple);
+}
+
+/* Lambda Row */
+.lambda-row {
+    background: rgba(210, 153, 34, 0.05);
+    padding: 6px 8px;
+    border-radius: var(--radius);
+    border: 1px dashed var(--accent-orange);
+}
+
+/* Main Row with Runtime and Services */
+.main-row {
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+}
+
+/* Runtime Container */
+.arch-node.runtime-container {
+    flex: 1;
+    background: var(--bg-card);
+    border: 2px solid var(--accent-blue);
+    padding: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    text-align: left;
+}
+
+.runtime-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    background: rgba(88, 166, 255, 0.1);
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.runtime-header .node-icon {
+    font-size: 0.9rem;
+}
+
+.runtime-badge {
+    font-size: 0.5rem;
+    padding: 1px 4px;
+    background: var(--accent-blue);
+    color: var(--bg-primary);
+    border-radius: var(--radius-sm);
+    margin-left: auto;
+}
+
+/* Agent Nodes inside Runtime */
+.agent-node {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    margin: 3px 6px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    transition: all 0.2s ease;
+}
+
+.agent-node.supervisor {
+    background: linear-gradient(135deg, rgba(88, 166, 255, 0.15), transparent);
+    border-color: var(--accent-blue);
+}
+
+.agent-node.memory {
+    border-left: 2px solid var(--accent-purple);
+}
+
+.agent-node.stats {
+    border-left: 2px solid var(--accent-orange);
+}
+
+.agent-node.active {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 8px rgba(88, 166, 255, 0.3);
+}
+
+.agent-node.complete {
+    border-color: var(--accent-green);
+}
+
+.agent-node .agent-icon {
+    font-size: 0.75rem;
+}
+
+.agent-node .agent-label {
+    flex: 1;
+    font-size: 0.6rem;
+    font-weight: 500;
+}
+
+.agent-node .agent-status {
+    font-size: 0.5rem;
+    font-family: var(--font-mono);
+    padding: 1px 4px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-hover);
+    color: var(--text-muted);
+}
+
+.agent-node .agent-status.running {
+    background: rgba(88, 166, 255, 0.2);
+    color: var(--accent-blue);
+    animation: pulse 1s infinite;
+}
+
+.agent-node .agent-status.complete {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--accent-green);
+}
+
+.agent-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+    padding: 4px 6px 6px;
+}
+
+/* Services Column */
+.services-column {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 80px;
+}
+
+.services-column .arch-node {
+    flex: 1;
+}
+
+/* Memory inline badges */
+.memory-types-inline {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 3px;
+}
+
+.mem-badge {
+    font-size: 0.5rem;
+    padding: 1px 4px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+}
+
+.mem-badge.session {
+    background: rgba(88, 166, 255, 0.2);
+    color: var(--accent-blue);
+}
+
+.mem-badge.semantic {
+    background: rgba(163, 113, 247, 0.2);
+    color: var(--accent-purple);
+}
+
+.mem-badge.active {
+    box-shadow: 0 0 6px currentColor;
+}
+
+/* Flow Note */
+.arch-flow-note {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius);
+    font-size: 0.55rem;
+    color: var(--text-muted);
+    flex-wrap: wrap;
+}
+
+.flow-step {
+    background: var(--bg-hover);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+}
+
+.flow-arrow {
+    color: var(--accent-blue);
+}
+
+/* Activity Log */
+.activity-log {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    overflow: hidden;
+    max-height: 120px;
+}
+
+.log-header {
+    padding: 4px 8px;
+    background: var(--bg-secondary);
+    font-size: 0.65rem;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.log-entries {
+    max-height: 90px;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.log-entry {
+    font-size: 0.55rem;
+    font-family: var(--font-mono);
+    padding: 2px 4px;
+    margin-bottom: 1px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+}
+
+.log-entry.placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.log-entry.tool-call {
+    background: rgba(210, 153, 34, 0.1);
+    border-left: 2px solid var(--accent-orange);
+}
+
+.log-entry.agent-start {
+    background: rgba(88, 166, 255, 0.1);
+    border-left: 2px solid var(--accent-blue);
+}
+
+.log-entry.agent-complete {
+    background: rgba(63, 185, 80, 0.1);
+    border-left: 2px solid var(--accent-green);
+}
+
+.log-entry.memory-op {
+    background: rgba(163, 113, 247, 0.1);
+    border-left: 2px solid var(--accent-purple);
+}
+
+/* Mode badge */
+.mode-badge {
+    font-size: 0.6rem;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    background: rgba(210, 153, 34, 0.2);
+    color: var(--accent-orange);
+}
+
+.mode-badge.live {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--accent-green);
+}
+
 /* ===== Responsive ===== */
 @media (max-width: 1200px) {
     .main {

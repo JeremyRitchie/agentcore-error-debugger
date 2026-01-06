@@ -91,121 +91,163 @@ TypeError: Cannot read properties of undefined (reading 'map')
                 </div>
             </section>
 
-            <!-- Center: Agent Orchestration -->
+            <!-- Center: Agent Orchestration - Interactive Architecture -->
             <section class="panel orchestration-panel">
                 <div class="panel-header">
-                    <h2>🤖 Agent Orchestration</h2>
+                    <h2>🤖 Live Architecture</h2>
                     <div class="stats">
                         <span id="agentCount">0 agents</span>
                         <span class="divider">•</span>
                         <span id="toolCount">0 tools</span>
                         <span class="divider">•</span>
                         <span id="execTime">0.0s</span>
+                        <span class="divider">•</span>
+                        <span class="mode-badge" id="modeBadge">DEMO</span>
                     </div>
                 </div>
-                <div class="panel-body">
+                <div class="panel-body arch-container">
                     <div class="orchestration-empty" id="orchestrationEmpty">
                         <div class="empty-icon">🔍</div>
                         <p>Paste an error and click "Debug Error"</p>
-                        <p class="hint">Watch 7 specialized agents collaborate</p>
+                        <p class="hint">Watch the architecture come alive</p>
                     </div>
                     
-                    <div class="orchestration-flow" id="orchestrationFlow" style="display: none;">
-                        <!-- Supervisor -->
-                        <div class="agent-card supervisor" id="supervisorCard">
-                            <div class="agent-icon">👔</div>
-                            <div class="agent-info">
-                                <span class="agent-name">Supervisor</span>
-                                <span class="agent-desc">Orchestrates specialists</span>
-                            </div>
-                            <div class="agent-status" id="supervisorStatus">idle</div>
-                        </div>
-                        
-                        <div class="agent-connection">↓</div>
-                        
-                        <!-- Row 1: Parse & Security -->
-                        <div class="agent-row">
-                            <div class="agent-card" id="parserCard">
-                                <div class="agent-icon">📋</div>
-                                <div class="agent-info">
-                                    <span class="agent-name">Parser</span>
-                                    <span class="agent-desc">Regex, AST, Comprehend</span>
+                    <div class="arch-diagram" id="archDiagram" style="display: none;">
+                        <!-- Clean CSS-based architecture layout -->
+                        <div class="arch-layout">
+                            <!-- Row 1: User Entry -->
+                            <div class="arch-row entry-row">
+                                <div class="arch-node frontend" id="node-frontend">
+                                    <span class="node-icon">🌐</span>
+                                    <span class="node-label">Frontend</span>
                                 </div>
-                                <div class="agent-status" id="parserStatus">idle</div>
-                                <div class="agent-output" id="parserOutput"></div>
+                                <span class="arch-arrow">→</span>
+                                <div class="arch-node gateway" id="node-gateway">
+                                    <span class="node-icon">⚡</span>
+                                    <span class="node-label">Gateway</span>
+                                    <span class="node-sub">MCP Router</span>
+                                </div>
                             </div>
                             
-                            <div class="agent-card" id="securityCard">
-                                <div class="agent-icon">🔒</div>
-                                <div class="agent-info">
-                                    <span class="agent-name">Security</span>
-                                    <span class="agent-desc">PII, Secrets scan</span>
+                            <div class="arch-connector vertical">↓</div>
+                            
+                            <!-- Row 2: Lambda Tools (branching from Gateway) -->
+                            <div class="arch-row lambda-row">
+                                <div class="arch-node lambda" id="node-parser-lambda">
+                                    <span class="node-icon">λ</span>
+                                    <span class="node-label">Parser Lambda</span>
                                 </div>
-                                <div class="agent-status" id="securityStatus">idle</div>
-                                <div class="agent-output" id="securityOutput"></div>
-                            </div>
-                        </div>
-                        
-                        <div class="agent-connection">↓</div>
-                        
-                        <!-- Row 2: Memory & Context -->
-                        <div class="agent-row">
-                            <div class="agent-card memory" id="memoryCard">
-                                <div class="agent-icon">🧠</div>
-                                <div class="agent-info">
-                                    <span class="agent-name">Memory</span>
-                                    <span class="agent-desc">AgentCore Memory</span>
+                                <div class="arch-node lambda" id="node-security-lambda">
+                                    <span class="node-icon">λ</span>
+                                    <span class="node-label">Security Lambda</span>
                                 </div>
-                                <div class="agent-status" id="memoryStatus">idle</div>
-                                <div class="agent-output" id="memoryOutput"></div>
+                                <span class="arch-arrow">→</span>
+                                <div class="arch-node aws-service" id="node-comprehend">
+                                    <span class="node-icon">📝</span>
+                                    <span class="node-label">Comprehend</span>
+                                </div>
                             </div>
                             
-                            <div class="agent-card" id="contextCard">
-                                <div class="agent-icon">🌐</div>
-                                <div class="agent-info">
-                                    <span class="agent-name">Context</span>
-                                    <span class="agent-desc">GitHub, StackOverflow</span>
+                            <div class="arch-connector vertical">↓ invokes</div>
+                            
+                            <!-- Row 3: Main Runtime + Services -->
+                            <div class="arch-row main-row">
+                                <!-- Runtime Container -->
+                                <div class="arch-node runtime-container" id="node-runtime">
+                                    <div class="runtime-header">
+                                        <span class="node-icon">🐳</span>
+                                        <span>Runtime</span>
+                                        <span class="runtime-badge">ARM64</span>
+                                    </div>
+                                    
+                                    <!-- Supervisor -->
+                                    <div class="agent-node supervisor" id="agent-supervisor">
+                                        <span class="agent-icon">👔</span>
+                                        <span class="agent-label">Supervisor</span>
+                                        <span class="agent-status" id="supervisorStatus">idle</span>
+                                    </div>
+                                    
+                                    <!-- Agent Grid -->
+                                    <div class="agent-grid">
+                                        <div class="agent-node" id="agent-parser">
+                                            <span class="agent-icon">📋</span>
+                                            <span class="agent-label">Parser</span>
+                                            <span class="agent-status" id="parserStatus">idle</span>
+                                        </div>
+                                        <div class="agent-node" id="agent-security">
+                                            <span class="agent-icon">🔒</span>
+                                            <span class="agent-label">Security</span>
+                                            <span class="agent-status" id="securityStatus">idle</span>
+                                        </div>
+                                        <div class="agent-node" id="agent-context">
+                                            <span class="agent-icon">🌐</span>
+                                            <span class="agent-label">Context</span>
+                                            <span class="agent-status" id="contextStatus">idle</span>
+                                        </div>
+                                        <div class="agent-node memory" id="agent-memory">
+                                            <span class="agent-icon">🧠</span>
+                                            <span class="agent-label">Memory</span>
+                                            <span class="agent-status" id="memoryStatus">idle</span>
+                                        </div>
+                                        <div class="agent-node" id="agent-rootcause">
+                                            <span class="agent-icon">🎯</span>
+                                            <span class="agent-label">Root Cause</span>
+                                            <span class="agent-status" id="rootcauseStatus">idle</span>
+                                        </div>
+                                        <div class="agent-node" id="agent-fix">
+                                            <span class="agent-icon">🔧</span>
+                                            <span class="agent-label">Fix Gen</span>
+                                            <span class="agent-status" id="fixStatus">idle</span>
+                                        </div>
+                                        <div class="agent-node stats" id="agent-stats">
+                                            <span class="agent-icon">📊</span>
+                                            <span class="agent-label">Stats</span>
+                                            <span class="agent-status" id="statsStatus">idle</span>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="agent-status" id="contextStatus">idle</div>
-                                <div class="agent-output" id="contextOutput"></div>
-                            </div>
-                        </div>
-                        
-                        <div class="agent-connection">↓</div>
-                        
-                        <!-- Row 3: Root Cause & Fix -->
-                        <div class="agent-row">
-                            <div class="agent-card" id="rootcauseCard">
-                                <div class="agent-icon">🎯</div>
-                                <div class="agent-info">
-                                    <span class="agent-name">Root Cause</span>
-                                    <span class="agent-desc">Patterns, Bedrock</span>
+                                
+                                <!-- Services Column -->
+                                <div class="services-column">
+                                    <div class="arch-node aws-service" id="node-bedrock">
+                                        <span class="node-icon">🤖</span>
+                                        <span class="node-label">Bedrock</span>
+                                        <span class="node-sub">Claude 3.5</span>
+                                    </div>
+                                    <div class="arch-node memory-service" id="node-memory">
+                                        <span class="node-icon">🧠</span>
+                                        <span class="node-label">Memory</span>
+                                        <div class="memory-types-inline">
+                                            <span class="mem-badge session" id="mem-session">Session 24h</span>
+                                            <span class="mem-badge semantic" id="mem-semantic">Semantic ∞</span>
+                                        </div>
+                                    </div>
+                                    <div class="arch-node external" id="node-github">
+                                        <span class="node-icon">🐙</span>
+                                        <span class="node-label">GitHub</span>
+                                        <span class="node-sub">API</span>
+                                    </div>
                                 </div>
-                                <div class="agent-status" id="rootcauseStatus">idle</div>
-                                <div class="agent-output" id="rootcauseOutput"></div>
                             </div>
                             
-                            <div class="agent-card" id="fixCard">
-                                <div class="agent-icon">🔧</div>
-                                <div class="agent-info">
-                                    <span class="agent-name">Fix Generator</span>
-                                    <span class="agent-desc">Bedrock, AST validation</span>
-                                </div>
-                                <div class="agent-status" id="fixStatus">idle</div>
-                                <div class="agent-output" id="fixOutput"></div>
+                            <!-- Tool flow explanation -->
+                            <div class="arch-flow-note">
+                                <span class="flow-step">① Agents call tools</span>
+                                <span class="flow-arrow">→</span>
+                                <span class="flow-step">② Gateway routes</span>
+                                <span class="flow-arrow">→</span>
+                                <span class="flow-step">③ Lambda executes</span>
+                                <span class="flow-arrow">→</span>
+                                <span class="flow-step">④ AWS service</span>
                             </div>
                         </div>
                         
-                        <div class="agent-connection">↓</div>
-                        
-                        <!-- Stats -->
-                        <div class="agent-card stats" id="statsCard">
-                            <div class="agent-icon">📊</div>
-                            <div class="agent-info">
-                                <span class="agent-name">Statistics</span>
-                                <span class="agent-desc">Trends, frequency</span>
+                        <!-- Live activity log -->
+                        <div class="activity-log" id="activityLog">
+                            <div class="log-header">📡 Live Activity</div>
+                            <div class="log-entries" id="logEntries">
+                                <div class="log-entry placeholder">Waiting for analysis...</div>
                             </div>
-                            <div class="agent-status" id="statsStatus">idle</div>
                         </div>
                     </div>
                 </div>

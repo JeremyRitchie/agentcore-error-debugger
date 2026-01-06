@@ -1,15 +1,44 @@
 /**
  * Error Debugger - AgentCore Multi-Agent Demo
  * Frontend for the error debugging multi-agent system
+ * 
+ * BLOG SERIES FEATURE FLAGS:
+ * - Part 1: Basic multi-agent system (5 agents, Lambda tools, Bedrock)
+ * - Part 2: Advanced features (Memory, GitHub integration, full visualization)
  */
 
 // ===== Configuration =====
 const CONFIG = {
     apiEndpoint: window.AGENTCORE_CONFIG?.apiEndpoint || '/api',
     sessionId: 'sess_' + Math.random().toString(36).substring(2, 10),
-    demoMode: true, // Always use simulation for demo
+    // Demo mode: true unless the AgentCore backend is available
+    demoMode: window.AGENTCORE_CONFIG?.demoMode ?? true,
     githubRawUrl: 'https://raw.githubusercontent.com',
     githubApiUrl: 'https://api.github.com',
+};
+
+// ===== Feature Flags (Blog Post Parts) =====
+// Part 1: Basic agents (Parser, Security, Root Cause, Fix, Supervisor)
+// Part 2: Part 1 + Memory, Context, Stats agents + GitHub integration + Live viz
+const FEATURES = {
+    // Set via window config or default to Part 2 (full features)
+    PART: window.AGENTCORE_CONFIG?.part ?? 2,
+    
+    // Computed feature flags based on part
+    get MEMORY_ENABLED() { return this.PART >= 2; },
+    get CONTEXT_AGENT_ENABLED() { return this.PART >= 2; },
+    get STATS_AGENT_ENABLED() { return this.PART >= 2; },
+    get GITHUB_INTEGRATION_ENABLED() { return this.PART >= 2; },
+    get LIVE_ARCHITECTURE_ENABLED() { return this.PART >= 2; },
+    get ACTIVITY_LOG_ENABLED() { return this.PART >= 2; },
+    get PRESEEDED_MEMORY_ENABLED() { return this.PART >= 2; },
+    
+    // Part 1 features (always enabled)
+    get PARSER_AGENT_ENABLED() { return true; },
+    get SECURITY_AGENT_ENABLED() { return true; },
+    get ROOTCAUSE_AGENT_ENABLED() { return true; },
+    get FIX_AGENT_ENABLED() { return true; },
+    get LAMBDA_TOOLS_ENABLED() { return true; },
 };
 
 // ===== Secure PAT Handling =====
@@ -146,7 +175,8 @@ function initElements() {
         togglePatBtn: document.getElementById('togglePatBtn'),
         
         orchestrationEmpty: document.getElementById('orchestrationEmpty'),
-        orchestrationFlow: document.getElementById('orchestrationFlow'),
+        archDiagram: document.getElementById('archDiagram'),
+        modeBadge: document.getElementById('modeBadge'),
         
         agentCount: document.getElementById('agentCount'),
         toolCount: document.getElementById('toolCount'),
@@ -159,17 +189,31 @@ function initElements() {
         shortTermList: document.getElementById('shortTermList'),
         longTermList: document.getElementById('longTermList'),
         
-        // Agent cards
-        supervisorCard: document.getElementById('supervisorCard'),
-        parserCard: document.getElementById('parserCard'),
-        securityCard: document.getElementById('securityCard'),
-        memoryCard: document.getElementById('memoryCard'),
-        contextCard: document.getElementById('contextCard'),
-        rootcauseCard: document.getElementById('rootcauseCard'),
-        fixCard: document.getElementById('fixCard'),
-        statsCard: document.getElementById('statsCard'),
+        // Activity log
+        logEntries: document.getElementById('logEntries'),
         
-        // Agent statuses
+        // Architecture nodes (new interactive diagram)
+        nodeFrontend: document.getElementById('node-frontend'),
+        nodeGateway: document.getElementById('node-gateway'),
+        nodeParserLambda: document.getElementById('node-parser-lambda'),
+        nodeSecurityLambda: document.getElementById('node-security-lambda'),
+        nodeRuntime: document.getElementById('node-runtime'),
+        nodeComprehend: document.getElementById('node-comprehend'),
+        nodeBedrock: document.getElementById('node-bedrock'),
+        nodeGithub: document.getElementById('node-github'),
+        nodeMemory: document.getElementById('node-memory'),
+        
+        // Agent nodes inside runtime
+        agentSupervisor: document.getElementById('agent-supervisor'),
+        agentParser: document.getElementById('agent-parser'),
+        agentSecurity: document.getElementById('agent-security'),
+        agentContext: document.getElementById('agent-context'),
+        agentMemory: document.getElementById('agent-memory'),
+        agentRootcause: document.getElementById('agent-rootcause'),
+        agentFix: document.getElementById('agent-fix'),
+        agentStats: document.getElementById('agent-stats'),
+        
+        // Agent statuses (inside agent nodes)
         supervisorStatus: document.getElementById('supervisorStatus'),
         parserStatus: document.getElementById('parserStatus'),
         securityStatus: document.getElementById('securityStatus'),
@@ -179,14 +223,21 @@ function initElements() {
         fixStatus: document.getElementById('fixStatus'),
         statsStatus: document.getElementById('statsStatus'),
         
-        // Agent outputs
-        parserOutput: document.getElementById('parserOutput'),
-        securityOutput: document.getElementById('securityOutput'),
-        memoryOutput: document.getElementById('memoryOutput'),
-        contextOutput: document.getElementById('contextOutput'),
-        rootcauseOutput: document.getElementById('rootcauseOutput'),
-        fixOutput: document.getElementById('fixOutput'),
+        // Memory types
+        memSession: document.getElementById('mem-session'),
+        memSemantic: document.getElementById('mem-semantic'),
     };
+    
+    // Update mode badge
+    if (els.modeBadge) {
+        if (CONFIG.demoMode) {
+            els.modeBadge.textContent = 'DEMO';
+            els.modeBadge.classList.remove('live');
+        } else {
+            els.modeBadge.textContent = 'LIVE';
+            els.modeBadge.classList.add('live');
+        }
+    }
 }
 
 // ===== Simulation =====
@@ -215,26 +266,39 @@ async function simulateAnalysis(errorText) {
         stats: null,
     };
     
+    // Activate frontend node briefly
+    activateNode('node-frontend');
+    await sleep(100);
+    deactivateNode('node-frontend');
+    
     // 1. Supervisor starts
     await runAgent('supervisor', 'Analyzing error...', 200);
     
     // 2. Memory search (first!)
     await runAgent('memory', 'Searching similar errors...', 300);
+    logMemoryOp('search_patterns');
     state.toolsUsed += 1;
+    updateStats();
     result.memory = searchMemory(errorText);
     updateAgentOutput('memory', result.memory.count > 0 ? 
         `Found ${result.memory.count} similar errors!` : 'No matches found');
     
-    // 3. Parser
+    // 3. Parser - calls tools via Gateway → Lambda
     await runAgent('parser', 'Parsing stack trace...', 400);
-    state.toolsUsed += 4; // regex, AST, comprehend, classify
+    logToolCall('extract_stack_frames', 'Parser Lambda');
+    logToolCall('detect_language', 'Comprehend');
+    state.toolsUsed += 4;
+    updateStats();
     result.parsed = parseError(errorText);
     updateAgentOutput('parser', 
         `${result.parsed.language} | ${result.parsed.errorType}`);
     
-    // 4. Security
+    // 4. Security - calls tools via Gateway → Lambda
     await runAgent('security', 'Scanning for PII/secrets...', 300);
-    state.toolsUsed += 3; // PII, secrets, redact
+    logToolCall('detect_pii', 'Security Lambda → Comprehend');
+    logToolCall('detect_secrets', 'Security Lambda');
+    state.toolsUsed += 3;
+    updateStats();
     result.security = scanSecurity(errorText);
     updateAgentOutput('security', 
         `Risk: ${result.security.riskLevel} | ${result.security.secretsFound} secrets`);
@@ -243,7 +307,9 @@ async function simulateAnalysis(errorText) {
     if (state.githubRepo) {
         updateGithubStatus('loading', `Fetching code from ${state.githubRepo}...`);
         await runAgent('context', 'Fetching code from GitHub...', 300);
-        state.toolsUsed += 1; // github raw fetch
+        logToolCall('fetch_code_context', 'GitHub API');
+        state.toolsUsed += 1;
+        updateStats();
         result.codeContext = await fetchCodeFromStackTrace(errorText, result.parsed);
         updateAgentOutput('context', 
             `📂 ${result.codeContext.filesFound} files fetched`);
@@ -252,33 +318,45 @@ async function simulateAnalysis(errorText) {
     }
     
     await runAgent('context', 'Searching GitHub Issues, StackOverflow...', 400);
-    state.toolsUsed += 2; // github issues, stackoverflow
+    logToolCall('search_github_issues', 'GitHub API');
+    logToolCall('search_stackoverflow', 'SO API');
+    state.toolsUsed += 2;
+    updateStats();
     result.context = getContext(errorText, result.parsed);
     updateAgentOutput('context', 
         state.githubRepo 
             ? `📂 ${result.codeContext?.filesFound || 0} files | ${result.context.stackoverflowCount} SO answers`
             : `${result.context.githubCount} issues, ${result.context.stackoverflowCount} answers`);
     
-    // 6. Root Cause (now with code context!)
+    // 6. Root Cause - uses Bedrock LLM
     await runAgent('rootcause', 'Analyzing root cause...', 400);
-    state.toolsUsed += 2; // patterns, LLM
+    logToolCall('analyze_with_llm', 'Bedrock Claude');
+    logToolCall('match_patterns', 'AgentCore Memory');
+    state.toolsUsed += 2;
+    updateStats();
     result.rootCause = analyzeRootCause(errorText, result.parsed, result.codeContext);
     updateAgentOutput('rootcause', 
         `${result.rootCause.confidence}% confidence`);
     
-    // 7. Fix (now with code context!)
+    // 7. Fix - uses Bedrock LLM
     await runAgent('fix', 'Generating fix...', 500);
-    state.toolsUsed += 3; // generate, validate, test
+    logToolCall('generate_code_fix', 'Bedrock Claude');
+    logToolCall('validate_syntax', 'AST Parser');
+    state.toolsUsed += 3;
+    updateStats();
     result.fix = generateFix(result.rootCause, result.parsed.language, result.codeContext);
     updateAgentOutput('fix', 
         `${result.fix.fixType} | Syntax valid`);
     
     // 8. Stats
     await runAgent('stats', 'Recording statistics...', 150);
-    state.toolsUsed += 2; // record, trend
+    logToolCall('record_occurrence', 'In-memory stats');
+    state.toolsUsed += 2;
+    updateStats();
     result.stats = recordStats(result.parsed);
     
-    state.agentsUsed = 7;
+    // Store in memory
+    logMemoryOp('store_session_context');
     
     return result;
 }
@@ -529,26 +607,123 @@ async function fetchCodeFromStackTrace(errorText, parsed) {
     };
 }
 
+// ===== Activity Log =====
+function addLogEntry(message, type = 'info') {
+    if (!els.logEntries) return;
+    
+    // Remove placeholder
+    const placeholder = els.logEntries.querySelector('.placeholder');
+    if (placeholder) placeholder.remove();
+    
+    const entry = document.createElement('div');
+    entry.className = `log-entry ${type}`;
+    entry.textContent = `${new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })} ${message}`;
+    
+    els.logEntries.appendChild(entry);
+    els.logEntries.scrollTop = els.logEntries.scrollHeight;
+}
+
+function clearActivityLog() {
+    if (els.logEntries) {
+        els.logEntries.innerHTML = '<div class="log-entry placeholder">Waiting for analysis...</div>';
+    }
+}
+
+// ===== Node Animations =====
+function activateNode(nodeId) {
+    const node = document.getElementById(nodeId);
+    if (node) node.classList.add('active');
+}
+
+function deactivateNode(nodeId) {
+    const node = document.getElementById(nodeId);
+    if (node) node.classList.remove('active');
+}
+
+// Agent to service node mappings (which services light up when agent runs)
+const AGENT_NODES = {
+    supervisor: ['node-gateway', 'node-runtime'],
+    parser: ['node-gateway', 'node-parser-lambda', 'node-comprehend'],
+    security: ['node-gateway', 'node-security-lambda', 'node-comprehend'],
+    memory: ['node-memory'],
+    context: ['node-github'],
+    rootcause: ['node-bedrock'],
+    fix: ['node-bedrock', 'node-github'],
+    stats: [],
+};
+
 async function runAgent(agent, message, delay) {
     const statusEl = els[`${agent}Status`];
-    const cardEl = els[`${agent}Card`];
+    const agentEl = document.getElementById(`agent-${agent}`);
     
-    if (statusEl) statusEl.textContent = 'running';
-    if (statusEl) statusEl.className = 'agent-status running';
-    if (cardEl) cardEl.classList.add('running');
+    // Update status
+    if (statusEl) {
+        statusEl.textContent = 'running';
+        statusEl.className = 'agent-status running';
+    }
+    if (agentEl) agentEl.classList.add('active');
+    
+    // Activate related service nodes
+    const nodes = AGENT_NODES[agent] || [];
+    nodes.forEach(activateNode);
+    
+    // Log activity
+    addLogEntry(`${agent.toUpperCase()} → ${message}`, 'agent-start');
+    
+    // Increment agent count
+    state.agentsUsed++;
+    updateStats();
     
     await sleep(delay);
     
-    if (statusEl) statusEl.textContent = 'done';
-    if (statusEl) statusEl.className = 'agent-status complete';
-    if (cardEl) cardEl.classList.remove('running');
-    if (cardEl) cardEl.classList.add('complete');
+    // Complete
+    if (statusEl) {
+        statusEl.textContent = 'done';
+        statusEl.className = 'agent-status complete';
+    }
+    if (agentEl) {
+        agentEl.classList.remove('active');
+        agentEl.classList.add('complete');
+    }
+    
+    // Deactivate service nodes
+    nodes.forEach(deactivateNode);
+    
+    addLogEntry(`${agent.toUpperCase()} ✓ complete`, 'agent-complete');
+}
+
+function logToolCall(tool, target) {
+    addLogEntry(`TOOL ${tool} → ${target}`, 'tool-call');
+}
+
+function logMemoryOp(operation) {
+    addLogEntry(`MEM ${operation}`, 'memory-op');
+    // Flash memory node and badges
+    activateNode('node-memory');
+    const memSession = document.getElementById('mem-session');
+    const memSemantic = document.getElementById('mem-semantic');
+    if (memSession) memSession.classList.add('active');
+    if (memSemantic) memSemantic.classList.add('active');
+    setTimeout(() => {
+        deactivateNode('node-memory');
+        if (memSession) memSession.classList.remove('active');
+        if (memSemantic) memSemantic.classList.remove('active');
+    }, 500);
 }
 
 function updateAgentOutput(agent, text) {
-    const outputEl = els[`${agent}Output`];
-    if (outputEl) {
-        outputEl.textContent = text;
+    // Log the output
+    addLogEntry(`  └─ ${text}`, 'agent-complete');
+}
+
+function updateStats() {
+    if (els.agentCount) els.agentCount.textContent = `${state.agentsUsed} agents`;
+    if (els.toolCount) els.toolCount.textContent = `${state.toolsUsed} tools`;
+    
+    // Update execution time
+    if (els.execTime && state.startTime) {
+        const elapsed = ((Date.now() - state.startTime) / 1000).toFixed(1);
+        els.execTime.textContent = `${elapsed}s`;
     }
 }
 
@@ -929,21 +1104,28 @@ async function runAnalysis() {
     els.analyzeBtn.disabled = true;
     els.analyzeBtn.innerHTML = '<span class="icon">⏳</span><span>Analyzing...</span>';
     
-    // Show orchestration flow
-    els.orchestrationEmpty.style.display = 'none';
-    els.orchestrationFlow.style.display = 'flex';
+    // Show architecture diagram
+    if (els.orchestrationEmpty) els.orchestrationEmpty.style.display = 'none';
+    if (els.archDiagram) els.archDiagram.style.display = 'block';
     
-    // Reset agent cards
-    document.querySelectorAll('.agent-card').forEach(card => {
-        card.classList.remove('running', 'complete');
+    // Reset all architecture nodes and agents
+    document.querySelectorAll('.arch-node').forEach(node => {
+        node.classList.remove('active');
+    });
+    document.querySelectorAll('.agent-node').forEach(agent => {
+        agent.classList.remove('active', 'complete');
     });
     document.querySelectorAll('.agent-status').forEach(status => {
         status.textContent = 'idle';
         status.className = 'agent-status';
     });
-    document.querySelectorAll('.agent-output').forEach(output => {
-        output.textContent = '';
+    document.querySelectorAll('.mem-badge').forEach(mem => {
+        mem.classList.remove('active');
     });
+    
+    // Clear and prepare activity log
+    clearActivityLog();
+    addLogEntry('Starting analysis...', 'agent-start');
     
     // Show loading in results
     els.resultsContent.innerHTML = '<div class="loading">Analyzing error...</div>';

@@ -1,0 +1,206 @@
+<mxfile host="app.diagrams.net" modified="2024-01-06T12:00:00.000Z" agent="Cursor" version="22.1.0" type="device">
+  <diagram name="Error Debugger Architecture" id="error-debugger-arch">
+    <mxGraphModel dx="1434" dy="836" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        
+        <!-- FRONTEND GROUP -->
+        <mxCell id="frontend-group" value="🌐 FRONTEND" style="swimlane;horizontal=0;startSize=30;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="200" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="spa" value="Single Page App&#xa;(HTML/CSS/JS)&#xa;&#xa;📦 S3 Bucket&#xa;⚡ CloudFront CDN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="frontend-group">
+          <mxGeometry x="40" y="15" width="150" height="90" as="geometry"/>
+        </mxCell>
+
+        <!-- AGENTCORE GATEWAY GROUP -->
+        <mxCell id="gateway-group" value="⚡ AGENTCORE GATEWAY" style="swimlane;startSize=30;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="280" y="40" width="320" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="gateway" value="MCP Protocol&#xa;IAM Auth&#xa;Request Routing" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="gateway-group">
+          <mxGeometry x="20" y="40" width="120" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="parser-lambda" value="🔧 Parser Lambda&#xa;&#xa;• extract_stack_frames&#xa;• detect_language&#xa;• classify_error" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="gateway-group">
+          <mxGeometry x="160" y="40" width="140" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="security-lambda" value="🔒 Security Lambda&#xa;&#xa;• detect_pii&#xa;• detect_secrets" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="gateway-group">
+          <mxGeometry x="160" y="120" width="140" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- AGENTCORE RUNTIME GROUP -->
+        <mxCell id="runtime-group" value="🐳 AGENTCORE RUNTIME (Docker ARM64 Container)" style="swimlane;startSize=30;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="560" height="280" as="geometry"/>
+        </mxCell>
+        <mxCell id="supervisor" value="👔 Supervisor Agent&#xa;&#xa;Orchestrates all agents&#xa;based on error input" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="runtime-group">
+          <mxGeometry x="200" y="40" width="160" height="70" as="geometry"/>
+        </mxCell>
+        
+        <!-- Specialist Agents Row 1 -->
+        <mxCell id="parser-agent" value="📋 Parser&#xa;Agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="runtime-group">
+          <mxGeometry x="20" y="130" width="80" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="security-agent" value="🔒 Security&#xa;Agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="runtime-group">
+          <mxGeometry x="110" y="130" width="80" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="context-agent" value="🌐 Context&#xa;Agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="runtime-group">
+          <mxGeometry x="200" y="130" width="80" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="rootcause-agent" value="🎯 Root Cause&#xa;Agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="runtime-group">
+          <mxGeometry x="290" y="130" width="80" height="50" as="geometry"/>
+        </mxCell>
+        
+        <!-- Specialist Agents Row 2 -->
+        <mxCell id="fix-agent" value="🔧 Fix&#xa;Agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="runtime-group">
+          <mxGeometry x="380" y="130" width="80" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="memory-agent" value="🧠 Memory&#xa;Agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="runtime-group">
+          <mxGeometry x="470" y="130" width="80" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="stats-agent" value="📊 Stats&#xa;Agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="runtime-group">
+          <mxGeometry x="200" y="200" width="80" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- AGENTCORE MEMORY GROUP -->
+        <mxCell id="memory-group" value="🧠 AGENTCORE MEMORY" style="swimlane;startSize=30;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="640" y="280" width="200" height="160" as="geometry"/>
+        </mxCell>
+        <mxCell id="session-memory" value="📝 Session Memory&#xa;(Short-Term 24h)&#xa;&#xa;Conversation context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="memory-group">
+          <mxGeometry x="20" y="40" width="160" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="semantic-memory" value="🔍 Semantic Memory&#xa;(Long-Term)&#xa;&#xa;Error patterns &amp; insights" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="memory-group">
+          <mxGeometry x="20" y="100" width="160" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- AWS SERVICES GROUP -->
+        <mxCell id="aws-group" value="☁️ AWS SERVICES" style="swimlane;startSize=30;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="640" y="40" width="200" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="bedrock" value="🤖 Amazon Bedrock&#xa;Claude 3.5 Sonnet&#xa;&#xa;LLM Reasoning" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="aws-group">
+          <mxGeometry x="20" y="40" width="160" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="comprehend" value="📝 Amazon Comprehend&#xa;&#xa;• Language Detection&#xa;• PII Detection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="aws-group">
+          <mxGeometry x="20" y="120" width="160" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- EXTERNAL APIS GROUP -->
+        <mxCell id="external-group" value="🌍 EXTERNAL APIs" style="swimlane;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="640" y="480" width="200" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="github-api" value="🐙 GitHub API&#xa;&#xa;• Fetch code context&#xa;• Create issues/PRs&#xa;• Search issues" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="external-group">
+          <mxGeometry x="20" y="40" width="160" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- INFRASTRUCTURE GROUP -->
+        <mxCell id="infra-group" value="🏗️ INFRASTRUCTURE" style="swimlane;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="600" width="560" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="ecr" value="📦 ECR&#xa;Container Registry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#6c8ebf;" vertex="1" parent="infra-group">
+          <mxGeometry x="20" y="40" width="100" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="kms" value="🔐 KMS&#xa;Encryption" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#6c8ebf;" vertex="1" parent="infra-group">
+          <mxGeometry x="130" y="40" width="100" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="cloudwatch" value="📊 CloudWatch&#xa;Logs &amp; Metrics" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#6c8ebf;" vertex="1" parent="infra-group">
+          <mxGeometry x="240" y="40" width="100" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="iam" value="🔑 IAM&#xa;Workload Identity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#6c8ebf;" vertex="1" parent="infra-group">
+          <mxGeometry x="350" y="40" width="100" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="xray" value="🔍 X-Ray&#xa;Tracing" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#deebf7;strokeColor=#6c8ebf;" vertex="1" parent="infra-group">
+          <mxGeometry x="460" y="40" width="90" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- CONNECTIONS -->
+        <!-- Frontend to Gateway -->
+        <mxCell id="conn1" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#333333;" edge="1" parent="1" source="spa" target="gateway">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn1-label" value="HTTPS" style="edgeLabel;html=1;align=center;verticalAlign=middle;" vertex="1" connectable="0" parent="conn1">
+          <mxGeometry x="-0.2" relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>
+        </mxCell>
+
+        <!-- Gateway to Runtime -->
+        <mxCell id="conn2" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#333333;" edge="1" parent="1" source="gateway" target="supervisor">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn2-label" value="InvokeAgent" style="edgeLabel;html=1;align=center;verticalAlign=middle;" vertex="1" connectable="0" parent="conn2">
+          <mxGeometry x="-0.2" relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>
+        </mxCell>
+
+        <!-- Supervisor to Agents -->
+        <mxCell id="conn-sup-parser" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#666666;dashed=1;" edge="1" parent="1" source="supervisor" target="parser-agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn-sup-security" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#666666;dashed=1;" edge="1" parent="1" source="supervisor" target="security-agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn-sup-context" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#666666;dashed=1;" edge="1" parent="1" source="supervisor" target="context-agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn-sup-rootcause" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#666666;dashed=1;" edge="1" parent="1" source="supervisor" target="rootcause-agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn-sup-fix" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#666666;dashed=1;" edge="1" parent="1" source="supervisor" target="fix-agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn-sup-memory" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#666666;dashed=1;" edge="1" parent="1" source="supervisor" target="memory-agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn-sup-stats" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#666666;dashed=1;" edge="1" parent="1" source="supervisor" target="stats-agent">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Memory Agent to Memory -->
+        <mxCell id="conn-mem" style="endArrow=classic;startArrow=classic;html=1;strokeWidth=2;strokeColor=#9673a6;" edge="1" parent="1" source="memory-agent" target="session-memory">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Root Cause to Bedrock -->
+        <mxCell id="conn-bedrock1" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#d79b00;" edge="1" parent="1" source="rootcause-agent" target="bedrock">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        
+        <!-- Fix Agent to Bedrock -->
+        <mxCell id="conn-bedrock2" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#d79b00;" edge="1" parent="1" source="fix-agent" target="bedrock">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Lambda to Comprehend -->
+        <mxCell id="conn-comprehend1" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#d79b00;" edge="1" parent="1" source="parser-lambda" target="comprehend">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn-comprehend2" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#d79b00;" edge="1" parent="1" source="security-lambda" target="comprehend">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Context Agent to GitHub -->
+        <mxCell id="conn-github" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="context-agent" target="github-api">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Fix Agent to GitHub -->
+        <mxCell id="conn-github2" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#666666;" edge="1" parent="1" source="fix-agent" target="github-api">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Memory to KMS -->
+        <mxCell id="conn-kms" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#6c8ebf;dashed=1;" edge="1" parent="1" source="semantic-memory" target="kms">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn-kms-label" value="Encrypts" style="edgeLabel;html=1;align=center;verticalAlign=middle;" vertex="1" connectable="0" parent="conn-kms">
+          <mxGeometry x="-0.2" relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>
+        </mxCell>
+
+        <!-- Runtime to ECR -->
+        <mxCell id="conn-ecr" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#6c8ebf;dashed=1;" edge="1" parent="1" source="supervisor" target="ecr">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn-ecr-label" value="Docker Image" style="edgeLabel;html=1;align=center;verticalAlign=middle;" vertex="1" connectable="0" parent="conn-ecr">
+          <mxGeometry x="-0.2" relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
+

@@ -37,6 +37,41 @@
                     <button class="btn-ghost" id="loadSampleBtn">Load Sample</button>
                 </div>
                 <div class="panel-body">
+                    <!-- GitHub Repo Input -->
+                    <div class="github-input">
+                        <label for="githubRepo">
+                            <span class="github-icon">🔗</span>
+                            GitHub Repo (optional - enables code context)
+                        </label>
+                        <div class="github-input-row">
+                            <input 
+                                type="text" 
+                                id="githubRepo" 
+                                placeholder="owner/repo (e.g., facebook/react)"
+                                spellcheck="false"
+                            />
+                            <input 
+                                type="text" 
+                                id="githubBranch" 
+                                placeholder="main"
+                                value="main"
+                                class="branch-input"
+                            />
+                        </div>
+                        <div class="github-pat-row">
+                            <input 
+                                type="password" 
+                                id="githubPat" 
+                                placeholder="PAT (for private repos only)"
+                                spellcheck="false"
+                            />
+                            <button class="btn-ghost btn-sm" id="togglePatBtn" type="button">👁</button>
+                        </div>
+                        <div class="github-status" id="githubStatus">
+                            <span class="hint">🔒 PAT stored in memory only, never persisted</span>
+                        </div>
+                    </div>
+                    
                     <textarea 
                         id="errorInput" 
                         placeholder="Paste your error message, stack trace, or exception here...

@@ -1,0 +1,42 @@
+Id,Name,Shape,Container,Container Name,Text Area 1,Text Area 2,Line Source,Line Destination
+1,Frontend,Rectangle,,,"🌐 FRONTEND","S3 + CloudFront",,
+2,SPA,Rectangle,TRUE,Frontend,"Single Page App","HTML/CSS/JS",,
+3,Config,Rectangle,TRUE,Frontend,"config.js","Gateway URL, Runtime ID",,
+4,Gateway,Rectangle,,,"⚡ AGENTCORE GATEWAY","MCP Protocol + IAM Auth",,
+5,Parser Lambda,Rectangle,TRUE,Gateway,"🔧 Parser Lambda","Regex, Comprehend Language, Error Classification",,
+6,Security Lambda,Rectangle,TRUE,Gateway,"🔧 Security Lambda","Comprehend PII, Regex Secrets",,
+7,Runtime,Rectangle,,,"🐳 AGENTCORE RUNTIME","Docker Container (ARM64)",,
+8,Supervisor,Rectangle,TRUE,Runtime,"👔 SUPERVISOR AGENT","Orchestrates 7 specialists",,
+9,Parser Agent,Rectangle,TRUE,Runtime,"📋 Parser Agent","Stack trace extraction",,
+10,Security Agent,Rectangle,TRUE,Runtime,"🔒 Security Agent","PII & secrets scanning",,
+11,Context Agent,Rectangle,TRUE,Runtime,"🌐 Context Agent","GitHub, StackOverflow",,
+12,Memory Agent,Rectangle,TRUE,Runtime,"🧠 Memory Agent","AgentCore Memory API",,
+13,RootCause Agent,Rectangle,TRUE,Runtime,"🎯 Root Cause Agent","Pattern matching, LLM",,
+14,Fix Agent,Rectangle,TRUE,Runtime,"🔧 Fix Agent","Code generation, AST",,
+15,Stats Agent,Rectangle,TRUE,Runtime,"📊 Stats Agent","Frequency, trends",,
+16,Memory,Rectangle,,,"🧠 AGENTCORE MEMORY","Embeddings + Search",,
+17,Session Memory,Rectangle,TRUE,Memory,"SHORT-TERM","Session Context (24h TTL)",,
+18,Semantic Memory,Rectangle,TRUE,Memory,"LONG-TERM","Error Patterns (Persistent)",,
+19,Bedrock,Rectangle,,,"🤖 AMAZON BEDROCK",,,
+20,Claude,Rectangle,TRUE,Bedrock,"Claude 3 Sonnet","Root cause & fix generation",,
+21,Comprehend,Rectangle,,,"📝 AMAZON COMPREHEND",,,
+22,PII Detection,Rectangle,TRUE,Comprehend,"PII Detection","Names, emails, etc.",,
+23,Language Detection,Rectangle,TRUE,Comprehend,"Language Detection","en, es, etc.",,
+24,External,Rectangle,,,"🌍 EXTERNAL APIs",,,
+25,GitHub,Rectangle,TRUE,External,"GitHub API","Code fetch, Issues, PRs",,
+26,StackOverflow,Rectangle,TRUE,External,"Stack Overflow API","Related questions",,
+27,Observability,Rectangle,,,"📊 OBSERVABILITY",,,
+28,XRay,Rectangle,TRUE,Observability,"AWS X-Ray","Distributed Tracing",,
+29,CloudWatch,Rectangle,TRUE,Observability,"CloudWatch Logs","Agent logs",,
+C1,Frontend to Gateway,Line,,,,,1,4
+C2,Gateway to Runtime,Line,,,,,4,7
+C3,Gateway to Parser Lambda,Line,,,,,4,5
+C4,Gateway to Security Lambda,Line,,,,,4,6
+C5,Memory Agent to Memory,Line,,,,,12,16
+C6,RootCause to Bedrock,Line,,,,,13,19
+C7,Fix to Bedrock,Line,,,,,14,19
+C8,Context to External,Line,,,,,11,24
+C9,Parser Lambda to Comprehend,Line,,,,,5,21
+C10,Security Lambda to Comprehend,Line,,,,,6,21
+C11,Runtime to Observability,Line,,,,,7,27
+

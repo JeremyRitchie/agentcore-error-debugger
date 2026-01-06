@@ -9,159 +9,293 @@ This is a technical demo for a two-part blog series on AWS AgentCore:
 - **Part 1**: Core agents (Parser, Security, Root Cause, Fix, Memory)
 - **Part 2**: Advanced features (Context APIs, Statistics, Long-term Learning)
 
-## 🏗️ Architecture
+---
+
+## 🏗️ Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      SUPERVISOR AGENT                            │
-│           Orchestrates all specialist agents                     │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        ▼                     ▼                     ▼
-┌───────────────┐    ┌───────────────┐    ┌───────────────┐
-│ Parser Agent  │    │Security Agent │    │ Memory Agent  │
-├───────────────┤    ├───────────────┤    ├───────────────┤
-│ 🔧 Regex      │    │ 🔧 Comprehend │    │ 🔧 AgentCore  │
-│ 🔧 AST Parse  │    │    PII        │    │    Memory API │
-│ 🔧 Comprehend │    │ 🔧 Regex      │    │ 🔧 Semantic   │
-│    Language   │    │    Secrets    │    │    Search     │
-└───────────────┘    └───────────────┘    └───────────────┘
-        │                    │                    │
-        ▼                    ▼                    ▼
-┌───────────────┐    ┌───────────────┐    ┌───────────────┐
-│ Context Agent │    │ Root Cause    │    │  Fix Agent    │
-├───────────────┤    ├───────────────┤    ├───────────────┤
-│ 🔧 GitHub     │    │ 🔧 Pattern    │    │ 🔧 Bedrock    │
-│    Issues API │    │    Database   │    │    Claude     │
-│ 🔧 StackOver  │    │ 🔧 Bedrock    │    │ 🔧 AST        │
-│    flow API   │    │    Claude     │    │    Validation │
-└───────────────┘    └───────────────┘    └───────────────┘
-                              │
-                              ▼
-                    ┌───────────────┐
-                    │ Stats Agent   │
-                    ├───────────────┤
-                    │ 🔧 Frequency  │
-                    │ 🔧 Trends     │
-                    └───────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           🌐 FRONTEND (S3 + CloudFront)                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Single Page App (HTML/CSS/JS)  │  config.js (Gateway URL, Runtime ID)  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                      │ HTTPS
+                                      ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                     ⚡ AGENTCORE GATEWAY (MCP Protocol)                       │
+│                           IAM Authentication                                  │
+│  ┌────────────────────────────────┬────────────────────────────────────────┐ │
+│  │     🔧 PARSER LAMBDA           │        🔧 SECURITY LAMBDA              │ │
+│  │  • Regex stack extraction      │  • Comprehend PII detection            │ │
+│  │  • Comprehend language         │  • Regex secret patterns               │ │
+│  │  • Error classification        │  • Risk assessment                     │ │
+│  └────────────────────────────────┴────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                      │ Invoke Runtime
+                                      ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                  🐳 AGENTCORE RUNTIME (Docker Container - ARM64)              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                      👔 SUPERVISOR AGENT (Strands SDK)                   │ │
+│  │                    Orchestrates all specialist agents                    │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│       │           │           │           │           │           │          │
+│       ▼           ▼           ▼           ▼           ▼           ▼          │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐    │
+│  │📋Parser │ │🔒Securi │ │🧠Memory │ │🌐Context│ │🎯Root   │ │🔧Fix    │    │
+│  │  Agent  │ │  Agent  │ │  Agent  │ │  Agent  │ │  Cause  │ │  Agent  │    │
+│  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘    │
+│       │           │           │           │           │           │          │
+│  Calls Lambda  Calls Lambda   │       HTTP APIs    Bedrock     Bedrock       │
+│  via Gateway   via Gateway    │           │        Claude      Claude        │
+│                               ▼           ▼           │           │          │
+│                    ┌─────────────────────────────────────────────────────┐   │
+│                    │                  📊 STATS AGENT                      │   │
+│                    │              Frequency, Trends, Recording            │   │
+│                    └─────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────────┘
+        │                               │                       │
+        │ Store/Search                  │ HTTP                  │ InvokeModel
+        ▼                               ▼                       ▼
+┌────────────────────┐    ┌────────────────────┐    ┌────────────────────────┐
+│ 🧠 AGENTCORE       │    │ 🌍 EXTERNAL APIs   │    │ 🤖 AMAZON BEDROCK      │
+│    MEMORY          │    │ • GitHub API       │    │ • Claude 3 Sonnet      │
+│ ┌────────────────┐ │    │   (code, issues)   │    │ • Root cause analysis  │
+│ │ SHORT-TERM     │ │    │ • Stack Overflow   │    │ • Code fix generation  │
+│ │ Session: 24h   │ │    │   (Q&A search)     │    │                        │
+│ ├────────────────┤ │    └────────────────────┘    └────────────────────────┘
+│ │ LONG-TERM      │ │
+│ │ Semantic Search│ │    ┌────────────────────┐    ┌────────────────────────┐
+│ │ Error Patterns │ │    │ 📝 AMAZON          │    │ 📊 OBSERVABILITY       │
+│ └────────────────┘ │    │    COMPREHEND      │    │ • X-Ray Tracing        │
+└────────────────────┘    │ • PII Detection    │    │ • CloudWatch Logs      │
+                          │ • Language Detect  │    │                        │
+                          └────────────────────┘    └────────────────────────┘
 ```
 
-## 🔧 Tools by Agent
+---
 
-| Agent | Tools | AWS/External Services |
-|-------|-------|----------------------|
-| **Parser** | `extract_stack_frames`, `detect_language`, `classify_error`, `extract_message` | Regex, AST, Comprehend |
-| **Security** | `detect_pii`, `detect_secrets`, `redact_data`, `assess_risk` | Comprehend PII, Regex |
-| **Context** | `search_github_issues`, `search_stackoverflow`, `fetch_docs`, `get_explanation` | GitHub API, SO API |
-| **Root Cause** | `match_known_patterns`, `analyze_with_llm`, `synthesize_hypothesis` | Pattern DB, Bedrock Claude |
-| **Fix** | `generate_code_fix`, `validate_syntax`, `suggest_prevention`, `generate_test` | Bedrock Claude, AST |
-| **Memory** | `store_error_pattern`, `search_similar_errors`, `store_session`, `get_session` | AgentCore Memory API |
-| **Stats** | `calculate_frequency`, `detect_trend`, `record_error`, `get_top_errors` | Time-series, Stats |
+## 📦 What Runs Where
+
+| Component | Runtime | Description |
+|-----------|---------|-------------|
+| **Frontend** | S3 + CloudFront | Static SPA, calls Gateway via HTTPS |
+| **Gateway** | AgentCore Gateway | MCP protocol, IAM auth, routes to Lambda/Runtime |
+| **Parser Lambda** | AWS Lambda | Regex extraction, Comprehend language detection |
+| **Security Lambda** | AWS Lambda | Comprehend PII, regex secret scanning |
+| **Supervisor Agent** | AgentCore Runtime (Docker) | Orchestrates specialists via Strands SDK |
+| **Specialist Agents** | AgentCore Runtime (Docker) | Parser, Security, Memory, Context, RootCause, Fix, Stats |
+| **Memory** | AgentCore Memory | Session (24h) + Semantic (persistent) storage |
+| **LLM** | Amazon Bedrock | Claude 3 Sonnet for reasoning and code generation |
+
+---
+
+## 🔧 Tools by Agent and Where They Run
+
+| Agent | Tools | Runs In | Calls |
+|-------|-------|---------|-------|
+| **Parser** | `extract_stack_frames`, `detect_language`, `classify_error` | **Lambda** (via Gateway MCP) | Comprehend |
+| **Security** | `detect_pii`, `detect_secrets`, `assess_risk` | **Lambda** (via Gateway MCP) | Comprehend |
+| **Memory** | `store_session`, `get_session`, `store_pattern`, `search_patterns` | **Runtime** (in-process) | AgentCore Memory API |
+| **Context** | `search_github`, `search_stackoverflow`, `fetch_code` | **Runtime** (in-process) | GitHub API, SO API |
+| **Root Cause** | `match_patterns`, `analyze_with_llm` | **Runtime** (in-process) | Memory + Bedrock Claude |
+| **Fix** | `generate_fix`, `validate_syntax`, `create_issue`, `create_pr` | **Runtime** (in-process) | Bedrock Claude, GitHub API |
+| **Stats** | `record_occurrence`, `calculate_frequency`, `detect_trend` | **Runtime** (in-process) | In-memory stats |
+
+---
+
+## 🔄 Request Flow
+
+```
+1. User pastes error in Frontend
+                │
+2. Frontend calls Gateway (/api/debug)
+                │
+3. Gateway invokes AgentCore Runtime
+                │
+4. Supervisor Agent orchestrates:
+   │
+   ├─► Memory Agent: "Have we seen this before?"
+   │   └─► AgentCore Memory API (semantic search)
+   │
+   ├─► Parser Agent: "Extract stack trace"
+   │   └─► Gateway → Parser Lambda → Comprehend
+   │
+   ├─► Security Agent: "Any secrets/PII?"
+   │   └─► Gateway → Security Lambda → Comprehend
+   │
+   ├─► Context Agent: "Find external context"
+   │   └─► GitHub API, Stack Overflow API
+   │
+   ├─► Root Cause Agent: "What's the root cause?"
+   │   └─► Memory patterns + Bedrock Claude
+   │
+   ├─► Fix Agent: "Generate a fix"
+   │   └─► Bedrock Claude + syntax validation
+   │
+   └─► Stats Agent: "Record for trending"
+       └─► In-memory statistics
+                │
+5. Results streamed back to Frontend
+                │
+6. User can create GitHub Issue/PR (with PAT)
+```
+
+---
+
+## 🧠 Memory Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   AGENTCORE MEMORY                          │
+├─────────────────────────────────────────────────────────────┤
+│  SHORT-TERM (Session Memory)          LONG-TERM (Semantic)  │
+│  ┌───────────────────────────┐  ┌───────────────────────┐   │
+│  │ • Current error context   │  │ • Error patterns      │   │
+│  │ • Hypotheses tried        │  │ • Root cause → fix    │   │
+│  │ • User session data       │  │ • Success counts      │   │
+│  │                           │  │ • Embeddings search   │   │
+│  │ TTL: 24 hours             │  │ TTL: 30+ days         │   │
+│  └───────────────────────────┘  └───────────────────────┘   │
+│                                                             │
+│  API Calls:                                                 │
+│  • CreateMemoryEvent (store)                                │
+│  • GetMemoryEvents (retrieve session)                       │
+│  • SearchMemory (semantic search)                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ## 📁 Project Structure
 
 ```
-error_debugger/
-├── agent/                    # AgentCore Runtime
-│   ├── supervisor.py        # 🎯 Main supervisor agent
-│   ├── agents/              # 🔧 Specialist agents
-│   │   ├── parser_agent.py  # Regex, AST, Comprehend
-│   │   ├── security_agent.py # PII, Secrets scanning
-│   │   ├── context_agent.py # GitHub, StackOverflow
-│   │   ├── rootcause_agent.py # Patterns, LLM analysis
-│   │   ├── fix_agent.py     # Code generation
-│   │   ├── memory_agent.py  # AgentCore Memory
-│   │   └── stats_agent.py   # Analytics
-│   ├── Dockerfile
-│   └── requirements.txt
-├── app/                      # Frontend SPA
+error-debugger/
+├── .github/workflows/
+│   ├── bootstrap.yml        # Create S3/DynamoDB/ECR (run first!)
+│   └── deploy.yml           # Build container, deploy infrastructure
+│
+├── agent/                   # 🐳 AgentCore Runtime (Docker)
+│   ├── supervisor.py        # 👔 Supervisor agent
+│   ├── agents/
+│   │   ├── parser_agent.py  # Calls Parser Lambda via Gateway
+│   │   ├── security_agent.py # Calls Security Lambda via Gateway
+│   │   ├── memory_agent.py  # AgentCore Memory API (direct)
+│   │   ├── context_agent.py # GitHub/SO APIs (direct HTTP)
+│   │   ├── rootcause_agent.py # Bedrock Claude (direct)
+│   │   ├── fix_agent.py     # Bedrock Claude (direct)
+│   │   └── stats_agent.py   # In-memory stats
+│   ├── Dockerfile           # ARM64 container for AgentCore
+│   └── requirements.txt     # strands-agents, bedrock-agentcore
+│
+├── app/                     # 🌐 Frontend (S3 + CloudFront)
 │   ├── index.html
 │   ├── styles.css
-│   └── app.js
-└── README.md
+│   └── app.js               # Demo mode + GitHub integration
+│
+├── terraform/agentcore/     # 🏗️ Infrastructure
+│   ├── main.tf              # Provider config
+│   ├── gateway.tf           # AgentCore Gateway + MCP targets
+│   ├── runtime.tf           # AgentCore Runtime + endpoint
+│   ├── memory.tf            # AgentCore Memory + KMS
+│   ├── tool_lambdas.tf      # Parser + Security Lambdas
+│   ├── frontend.tf          # S3, CloudFront, ACM, Route53
+│   └── outputs.tf
+│
+└── docs/
+    ├── architecture.mmd     # Mermaid diagram (import to Lucidchart)
+    └── architecture-lucidchart.csv  # CSV import for Lucidchart
 ```
 
-## 🧠 Memory System
+---
 
-### SHORT-TERM (Session Memory)
-- **TTL**: 24 hours
-- **Purpose**: Current debugging session context
-- **Stores**: Current error, hypotheses, user context
+## 🚀 Deployment
 
-### LONG-TERM (Semantic Memory)
-- **TTL**: 30+ days (persistent)
-- **Purpose**: Error patterns and solutions learned over time
-- **Stores**: error_type → root_cause → solution mappings
-- **Features**: Semantic search for similar past errors
-
-## 🚀 Running Locally
-
-### Frontend Only (Demo Mode)
+### 1. Bootstrap (One-time)
 ```bash
-cd app
-python -m http.server 8080
-# Open http://localhost:8080
+# Run Bootstrap workflow to create:
+# - S3 bucket for Terraform state
+# - DynamoDB table for state locking
+# - ECR repository for agent container
 ```
 
-### With Docker (Full AgentCore)
+### 2. Deploy
 ```bash
-cd agent
-docker build -t error-debugger .
-docker run -e AWS_REGION=us-east-1 \
-           -e MEMORY_ID=your-memory-id \
-           error-debugger
+# Push to main branch, or manually trigger Deploy workflow
+# Creates: Gateway, Runtime, Memory, Lambdas, Frontend
 ```
 
-## 📝 Blog Series Structure
+### 3. Required GitHub Variables
+| Variable | Description |
+|----------|-------------|
+| `AWS_ROLE_ARN` | IAM role for OIDC authentication |
+| `PROJECT_NAME` | `error-debugger` (optional) |
+| `AWS_REGION` | `us-east-1` (optional) |
 
-### Part 1: Building a Multi-Agent Error Debugger
-- Supervisor + 4 core agents
-- Parser, Security, Root Cause, Fix agents
-- Session memory for current context
-- **Demo**: Paste error → Get diagnosis and fix
+---
 
-### Part 2: Learning from Every Error
-- Add Context agent (external APIs)
-- Add Stats agent (trends, frequency)
-- Long-term semantic memory
-- Similar error search: "We've seen this before"
-- **Demo**: Error patterns accumulate and speed up future debugging
+## 🔐 GitHub Integration (PAT)
+
+The app can fetch code from GitHub and create Issues/PRs:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  PAT Storage: Memory only (never persisted)                 │
+│  Cleared on: Page unload                                    │
+│  Required scopes:                                           │
+│  • contents: read/write (fetch code, commit fixes)          │
+│  • issues: read/write (create issues)                       │
+│  • pull_requests: read/write (create PRs)                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📊 Lucidchart Import
+
+Two files are provided in `/docs/`:
+
+1. **`architecture.mmd`** - Mermaid diagram
+   - Go to Lucidchart → Import → Select Mermaid
+   
+2. **`architecture-lucidchart.csv`** - CSV with shapes
+   - Go to Lucidchart → File → Import Data → CSV
+
+---
 
 ## 🎯 Key AgentCore Features Demonstrated
 
-1. **AgentCore Runtime** - Serverless agent execution
-2. **AgentCore Memory** - Session + Semantic memory with embeddings
-3. **Multi-Agent Orchestration** - Supervisor pattern with specialists
-4. **Tool Diversity** - Each agent has unique, distinct tools
-5. **Strands Framework** - Python SDK for agent development
+| Feature | How It's Used |
+|---------|---------------|
+| **AgentCore Gateway** | MCP protocol, routes to Lambda tools |
+| **AgentCore Runtime** | Docker container running Strands agents |
+| **AgentCore Memory** | Session + Semantic memory with embeddings |
+| **Multi-Agent** | Supervisor orchestrates 7 specialists |
+| **Tool Diversity** | Lambda, Bedrock, APIs, regex, in-memory |
+
+---
 
 ## 🔍 Sample Errors to Test
 
 ```javascript
+// TypeError - common React error
 TypeError: Cannot read properties of undefined (reading 'map')
     at UserList (src/components/UserList.tsx:15:23)
 ```
 
 ```python
+# ImportError - missing package
 ImportError: No module named 'pandas'
     at File "/app/analysis.py", line 3
 ```
 
 ```
+# ConnectionError - database connection
 Error: connect ECONNREFUSED 127.0.0.1:5432
     at TCPConnectWrap.afterConnect
 ```
 
-## 📊 What Makes This Demo Impressive
-
-1. **Tool Diversity**: Not just LLM prompts - real regex, AST, APIs
-2. **Memory is the Hero**: "We've seen this before" is genuinely useful
-3. **Clear Agent Roles**: Each agent has a specific job with specific tools
-4. **Visual Flow**: Watch agents collaborate in real-time
-5. **Practical Use Case**: Every developer debugs errors
-
 ---
 
 Built with ❤️ for AWS AgentCore
-

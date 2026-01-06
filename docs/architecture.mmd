@@ -1,0 +1,87 @@
+%%{init: {'theme': 'dark', 'themeVariables': { 'primaryColor': '#1a1f26', 'primaryTextColor': '#e7eaed', 'primaryBorderColor': '#58a6ff', 'lineColor': '#58a6ff', 'secondaryColor': '#242b33', 'tertiaryColor': '#2d363f'}}}%%
+
+flowchart TB
+    subgraph FRONTEND["🌐 FRONTEND (S3 + CloudFront)"]
+        UI["Single Page App<br/>HTML/CSS/JS"]
+        CONFIG["config.js<br/>Gateway URL, Runtime ID"]
+    end
+
+    subgraph GATEWAY["⚡ AGENTCORE GATEWAY (MCP Protocol)"]
+        GW["Gateway Endpoint<br/>IAM Auth"]
+        
+        subgraph LAMBDA_TOOLS["🔧 MCP TOOL LAMBDAS"]
+            PARSER_LAMBDA["Parser Lambda<br/>• Regex extraction<br/>• Comprehend language<br/>• Error classification"]
+            SECURITY_LAMBDA["Security Lambda<br/>• Comprehend PII<br/>• Regex secrets"]
+        end
+    end
+
+    subgraph RUNTIME["🐳 AGENTCORE RUNTIME (Docker/ARM64)"]
+        SUPERVISOR["👔 SUPERVISOR AGENT<br/>Orchestrates workflow"]
+        
+        subgraph AGENTS["Specialist Agents (Strands SDK)"]
+            PARSER_AGENT["📋 Parser Agent"]
+            SECURITY_AGENT["🔒 Security Agent"]
+            CONTEXT_AGENT["🌐 Context Agent"]
+            MEMORY_AGENT["🧠 Memory Agent"]
+            ROOTCAUSE_AGENT["🎯 Root Cause Agent"]
+            FIX_AGENT["🔧 Fix Agent"]
+            STATS_AGENT["📊 Stats Agent"]
+        end
+    end
+
+    subgraph MEMORY["🧠 AGENTCORE MEMORY"]
+        SESSION["SHORT-TERM<br/>Session Context<br/>TTL: 24h"]
+        SEMANTIC["LONG-TERM<br/>Error Patterns<br/>Semantic Search"]
+    end
+
+    subgraph BEDROCK["🤖 AMAZON BEDROCK"]
+        CLAUDE["Claude 3 Sonnet<br/>• Root cause analysis<br/>• Code fix generation"]
+    end
+
+    subgraph COMPREHEND["📝 AMAZON COMPREHEND"]
+        PII["PII Detection"]
+        LANG["Language Detection"]
+    end
+
+    subgraph EXTERNAL["🌍 EXTERNAL APIs"]
+        GITHUB["GitHub API<br/>• Fetch source code<br/>• Create issues/PRs"]
+        STACKOVERFLOW["Stack Overflow API<br/>• Related questions"]
+    end
+
+    subgraph OBSERVABILITY["📊 OBSERVABILITY"]
+        XRAY["AWS X-Ray<br/>Distributed Tracing"]
+        LOGS["CloudWatch Logs"]
+    end
+
+    %% Connections
+    UI -->|"HTTPS"| GW
+    GW -->|"Invoke Runtime"| SUPERVISOR
+    GW -->|"MCP Protocol"| PARSER_LAMBDA
+    GW -->|"MCP Protocol"| SECURITY_LAMBDA
+    
+    SUPERVISOR --> PARSER_AGENT
+    SUPERVISOR --> SECURITY_AGENT
+    SUPERVISOR --> CONTEXT_AGENT
+    SUPERVISOR --> MEMORY_AGENT
+    SUPERVISOR --> ROOTCAUSE_AGENT
+    SUPERVISOR --> FIX_AGENT
+    SUPERVISOR --> STATS_AGENT
+    
+    PARSER_AGENT -.->|"Tool call"| PARSER_LAMBDA
+    SECURITY_AGENT -.->|"Tool call"| SECURITY_LAMBDA
+    
+    MEMORY_AGENT -->|"Store/Search"| SESSION
+    MEMORY_AGENT -->|"Store/Search"| SEMANTIC
+    
+    ROOTCAUSE_AGENT -->|"InvokeModel"| CLAUDE
+    FIX_AGENT -->|"InvokeModel"| CLAUDE
+    
+    PARSER_LAMBDA --> LANG
+    SECURITY_LAMBDA --> PII
+    
+    CONTEXT_AGENT -->|"HTTP"| GITHUB
+    CONTEXT_AGENT -->|"HTTP"| STACKOVERFLOW
+    
+    RUNTIME --> XRAY
+    RUNTIME --> LOGS
+

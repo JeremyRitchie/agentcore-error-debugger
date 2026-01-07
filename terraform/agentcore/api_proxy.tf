@@ -281,22 +281,21 @@ def handler(event, context):
                                         except Exception as te:
                                             logger.warning(f"Failed to parse tool result: {te}")
                                     
-                                    # Capture final result - look for our structured result object
-                                    elif 'result' in parsed and 'toolResult' not in event_str:
-                                        result_val = parsed.get('result')
-                                        # Check if this is our structured agent results
-                                        if isinstance(result_val, dict) and any(k in result_val for k in ['parser', 'security', 'rootcause', 'summary']):
-                                            # This is the final structured result from supervisor
-                                            logger.info("Found structured agent results!")
-                                            agent_results['parser'] = result_val.get('parser')
-                                            agent_results['security'] = result_val.get('security')
-                                            agent_results['context'] = result_val.get('context')
-                                            agent_results['rootcause'] = result_val.get('rootcause')
-                                            agent_results['fix'] = result_val.get('fix')
-                                            agent_results['memory'] = result_val.get('memory')
-                                            agent_results['stats'] = result_val.get('stats')
-                                            agent_results['summary'] = result_val.get('summary')
-                                        # Also check for summary at top level
+                                    # Check for our SPECIFIC final result marker
+                                    # The supervisor yields this with "_agentcore_final_result": True
+                                    elif parsed.get('_agentcore_final_result') == True:
+                                        # This is THE final structured result from supervisor
+                                        logger.info("🎯 Found final structured result with marker!")
+                                        agents_data = parsed.get('agents', {})
+                                        if isinstance(agents_data, dict):
+                                            agent_results['parser'] = agents_data.get('parser')
+                                            agent_results['security'] = agents_data.get('security')
+                                            agent_results['context'] = agents_data.get('context')
+                                            agent_results['rootcause'] = agents_data.get('rootcause')
+                                            agent_results['fix'] = agents_data.get('fix')
+                                            agent_results['memory'] = agents_data.get('memory')
+                                            agent_results['stats'] = agents_data.get('stats')
+                                            logger.info(f"🎯 Extracted agents: {[k for k, v in agent_results.items() if v]}")
                                         if 'summary' in parsed:
                                             agent_results['summary'] = parsed.get('summary')
                                         final_result = parsed
@@ -314,9 +313,16 @@ def handler(event, context):
                                     pass
                     
                     logger.info(f"Processed {event_count} events")
-                    logger.info(f"Agent results captured: {[k for k, v in agent_results.items() if v]}")
+                    captured = [k for k, v in agent_results.items() if v]
+                    logger.info(f"Agent results captured: {captured}")
                     logger.info(f"Agent activity count: {len(agent_activity)}")
                     logger.info(f"Sample events (first 5): {sample_events[:5]}")
+                    
+                    # Log details about what we captured for debugging
+                    if not captured:
+                        logger.warning("⚠️ No agent results captured! Looking for '_agentcore_final_result' marker in events...")
+                    else:
+                        logger.info(f"✅ Successfully captured {len(captured)} agent results")
                     
                     # Build comprehensive response with all agent data
                     response_data = {

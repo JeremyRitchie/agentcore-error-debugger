@@ -302,10 +302,12 @@ def event_loop_tracker(**kwargs):
 )
 def parser_agent_tool(error_text: str) -> str:
     """Call Parser Lambda via Gateway to parse error messages."""
+    logger.info("📥 parser_agent_tool CALLED")
     update_component_status("parser", "running", f"Parsing {len(error_text)} chars...")
     try:
         result = gateway_tools.parse_error(error_text)
         language = result.get('language', 'unknown')
+        logger.info(f"📤 parser_agent_tool result: language={language}")
         
         if result.get('error'):
             update_component_status("parser", "error", error=result.get('error'))
@@ -313,10 +315,12 @@ def parser_agent_tool(error_text: str) -> str:
         
         # Store in session context for final output
         update_session_context("parsed", result)
+        logger.info(f"✅ parser_agent_tool updated session_context['parsed']")
         
         update_component_status("parser", "success", f"Detected: {language}")
         return json.dumps({"success": True, **result})
     except Exception as e:
+        logger.error(f"❌ parser_agent_tool error: {e}")
         update_component_status("parser", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e)})
 
@@ -330,12 +334,14 @@ def parser_agent_tool(error_text: str) -> str:
 )
 def security_agent_tool(error_text: str) -> str:
     """Call Security Lambda via Gateway to scan for sensitive data."""
+    logger.info("📥 security_agent_tool CALLED")
     update_component_status("security", "running", "Scanning for PII and secrets...")
     try:
         result = gateway_tools.scan_security(error_text)
         risk_level = result.get('risk_level', 'unknown')
         secrets = len(result.get('secrets_detected', []))
         pii = len(result.get('pii_entities', []))
+        logger.info(f"📤 security_agent_tool result: risk={risk_level}, secrets={secrets}, pii={pii}")
         
         if result.get('error'):
             update_component_status("security", "error", error=result.get('error'))
@@ -435,6 +441,7 @@ def rootcause_agent_tool(
     memory_context: str = "{}"
 ) -> str:
     """Route root cause analysis to the RootCause Agent with all gathered context."""
+    logger.info("📥 rootcause_agent_tool CALLED")
     update_component_status("rootcause", "running", "LLM reasoning with all gathered context...")
     try:
         # Parse all the context
@@ -458,6 +465,7 @@ def rootcause_agent_tool(
         
         # Store in session context for final output
         update_session_context("analysis", result)
+        logger.info(f"✅ rootcause_agent_tool updated session_context['analysis'] - confidence: {confidence}%")
         
         update_component_status("rootcause", "success", f"{confidence}% confidence (LLM reasoning)")
         return json.dumps({"success": True, **result})
@@ -490,6 +498,7 @@ def fix_agent_tool(
     external_solutions: str = "{}"
 ) -> str:
     """Route fix generation to the Fix Agent with full context."""
+    logger.info("📥 fix_agent_tool CALLED")
     update_component_status("fix", "running", f"Generating fix for {language}...")
     try:
         # Parse additional context
@@ -518,6 +527,7 @@ def fix_agent_tool(
         
         # Store in session context for final output
         update_session_context("fix", result)
+        logger.info(f"✅ fix_agent_tool updated session_context['fix'] - type: {fix_type}")
         
         update_component_status("fix", "success", f"Generated {fix_type} fix")
         return json.dumps({"success": True, **result})
@@ -1139,10 +1149,18 @@ async def error_debugger(payload, context):
     logger.info(f"Payload: {payload}")
     logger.info("=" * 50)
     
+    # CRITICAL: Reset session context for each new request
+    # Without this, stale data from previous requests would pollute the results
+    reset_session_context()
+    logger.info("🔄 Session context reset for new analysis")
+    
     try:
         user_input = payload.get("prompt", "") if isinstance(payload, dict) else str(payload)
         session_id = payload.get("session_id", "unknown") if isinstance(payload, dict) else "unknown"
         mode = payload.get("mode", "comprehensive") if isinstance(payload, dict) else "comprehensive"
+        
+        # Store original error in session context
+        session_context["original_error"] = user_input
         
         # Set session context for logging
         session_filter.set_session_id(session_id)
@@ -1202,25 +1220,47 @@ Follow the full analysis workflow with all agents.
         
         yield f"\n✅ Analysis complete ({event_count} events)\n"
         
+        # Log what's in session_context before generating summary
+        logger.info("=" * 40)
+        logger.info("📊 Session Context Summary (before final yield):")
+        for key, value in session_context.items():
+            if isinstance(value, dict):
+                non_empty = {k: v for k, v in value.items() if v}
+                logger.info(f"  {key}: {len(non_empty)} non-empty fields - {list(non_empty.keys())[:5]}")
+            else:
+                logger.info(f"  {key}: {str(value)[:100]}")
+        logger.info("=" * 40)
+        
         # Generate a final summary from all collected data
         summary = generate_final_summary(session_context)
         
+        # Build the agents data, filtering out empty dicts
+        agents_data = {
+            "parser": session_context.get("parsed", {}),
+            "security": session_context.get("security", {}),
+            "context": session_context.get("context", {}),
+            "rootcause": session_context.get("analysis", {}),
+            "fix": session_context.get("fix", {}),
+            "memory": session_context.get("memory", {}),
+            "stats": session_context.get("stats", {}),
+        }
+        
+        # Log which agents have data
+        agents_with_data = [k for k, v in agents_data.items() if v and any(v.values())]
+        logger.info(f"🎯 Agents with actual data: {agents_with_data}")
+        
         # Yield structured results from session_context for frontend
+        # Use "_agentcore_final_result" marker so Lambda can identify this among thousands of events
         final_result = {
-            "result": {
-                "parser": session_context.get("parsed", {}),
-                "security": session_context.get("security", {}),
-                "context": session_context.get("context", {}),
-                "rootcause": session_context.get("analysis", {}),
-                "fix": session_context.get("fix", {}),
-                "memory": session_context.get("memory", {}),
-                "stats": session_context.get("stats", {}),
-                "summary": summary,
-            },
+            "_agentcore_final_result": True,  # Marker for Lambda to identify this
+            "agents": agents_data,
             "summary": summary,
             "eventCount": event_count,
             "sessionId": session_id
         }
+        
+        logger.info(f"🎯 Yielding final structured result with keys: {list(final_result.keys())}")
+        logger.info(f"🎯 Summary length: {len(str(summary))}")
         yield json.dumps(final_result)
                 
     except Exception as e:

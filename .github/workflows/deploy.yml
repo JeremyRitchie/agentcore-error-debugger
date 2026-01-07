@@ -30,6 +30,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  actions: write  # Required for GHA cache
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -80,31 +81,36 @@ jobs:
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
       
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
       - name: Set up QEMU (for ARM64)
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
       
-      - name: Build & Push Agent Container
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:master
+      
+      - name: Get ECR Repository URL
+        id: ecr-vars
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           REPO_URL="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-agent"
-          
-          echo "🐳 Building multi-agent container for ARM64 (with cache)..."
-          cd agent
-          docker buildx build \
-            --platform linux/arm64 \
-            --push \
-            --cache-from type=gha \
-            --cache-to type=gha,mode=max \
-            -t ${REPO_URL}:latest \
-            -t ${REPO_URL}:${{ github.sha }} \
-            .
-          
+          echo "repo_url=${REPO_URL}" >> $GITHUB_OUTPUT
           echo "CONTAINER_IMAGE=${REPO_URL}:latest" >> $GITHUB_ENV
+      
+      - name: Build & Push Agent Container
+        uses: docker/build-push-action@v6
+        with:
+          context: ./agent
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ steps.ecr-vars.outputs.repo_url }}:latest
+            ${{ steps.ecr-vars.outputs.repo_url }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       
       # ===== Terraform =====
       - name: Terraform Init

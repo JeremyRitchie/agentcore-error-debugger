@@ -9,8 +9,8 @@ Set via environment variable: DEMO_MODE=true|false
 import os
 
 # Demo mode: Use simulated responses instead of real API calls
-# Default: True for local development, False when deployed
-DEMO_MODE = os.environ.get('DEMO_MODE', 'true').lower() in ('true', '1', 'yes')
+# Default: False when deployed (set DEMO_MODE=true for local testing)
+DEMO_MODE = os.environ.get('DEMO_MODE', 'false').lower() in ('true', '1', 'yes')
 
 # Feature part (1 = basic, 2 = advanced)
 FEATURE_PART = int(os.environ.get('FEATURE_PART', '2'))

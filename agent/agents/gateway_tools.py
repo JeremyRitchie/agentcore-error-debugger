@@ -125,14 +125,84 @@ class GatewayTools:
                 "function": match.group(1)
             })
         
-        # Detect language
+        # Detect language with comprehensive patterns
         language = "unknown"
-        if "Traceback" in error_text or ".py" in error_text:
-            language = "python"
-        elif ".js" in error_text or ".ts" in error_text:
-            language = "javascript"
-        elif "panic:" in error_text or ".go" in error_text:
-            language = "go"
+        language_confidence = 0
+        
+        language_patterns = {
+            "python": [
+                (r'Traceback \(most recent call last\)', 95),
+                (r'File ".*\.py"', 90),
+                (r'\.py:', 80),
+                (r'\bdef\s+\w+\s*\(', 60),
+                (r'\bclass\s+\w+\s*[:\(]', 60),
+                (r"(TypeError|ValueError|AttributeError|ImportError|KeyError|IndexError):", 70),
+                (r"'NoneType' object", 85),
+                (r'\bself\.\w+', 50),
+            ],
+            "javascript": [
+                (r'at\s+\w+\s+\([^)]*\.js:\d+:\d+\)', 95),
+                (r'\.js:\d+', 85),
+                (r'TypeError:.*undefined', 80),
+                (r'ReferenceError:', 75),
+                (r"Cannot read propert", 70),
+                (r'\bconst\s+\w+\s*=', 50),
+                (r'\bfunction\s+\w+\s*\(', 50),
+                (r'module\.exports', 70),
+                (r'require\([\'"]', 65),
+            ],
+            "typescript": [
+                (r'\.ts:\d+', 90),
+                (r'\.tsx:\d+', 90),
+                (r'error TS\d+:', 95),
+                (r'interface\s+\w+\s*\{', 60),
+            ],
+            "java": [
+                (r'at\s+[\w.]+\([\w]+\.java:\d+\)', 95),
+                (r'\.java:\d+', 85),
+                (r'Exception in thread', 90),
+                (r'(NullPointerException|ClassNotFoundException|IOException)', 85),
+                (r'public\s+(static\s+)?void\s+main', 70),
+            ],
+            "go": [
+                (r'panic:', 95),
+                (r'goroutine \d+', 90),
+                (r'\.go:\d+', 85),
+                (r'runtime error:', 80),
+                (r'\bfunc\s+\w+\s*\(', 50),
+            ],
+            "rust": [
+                (r'error\[E\d+\]:', 95),
+                (r"thread '.*' panicked", 90),
+                (r'\.rs:\d+', 85),
+                (r'\bfn\s+\w+\s*\(', 50),
+            ],
+            "ruby": [
+                (r'\.rb:\d+:in\s+', 95),
+                (r'from\s+.*\.rb:\d+', 85),
+                (r"(NoMethodError|NameError|ArgumentError):", 75),
+            ],
+            "php": [
+                (r'PHP Fatal error:', 95),
+                (r'PHP Warning:', 90),
+                (r'\.php:\d+', 85),
+                (r'Stack trace:', 70),
+            ],
+            "csharp": [
+                (r'\.cs:\d+', 85),
+                (r'at\s+[\w.]+\s+in\s+.*\.cs:line\s+\d+', 95),
+                (r'(NullReferenceException|ArgumentException)', 80),
+            ],
+        }
+        
+        for lang, patterns in language_patterns.items():
+            score = 0
+            for pattern, weight in patterns:
+                if re.search(pattern, error_text, re.IGNORECASE):
+                    score += weight
+            if score > language_confidence:
+                language_confidence = score
+                language = lang
         
         # Classify error type
         error_type = "unknown"

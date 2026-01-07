@@ -203,6 +203,31 @@ def context_agent_tool(error_message: str, error_type: str = "unknown", language
 
 
 # ============================================================================
+# GITHUB FILE READER TOOL (For reading source code from repos)
+# ============================================================================
+@tool(
+    name="read_github_file_tool",
+    description="Read a file from a GitHub repository to get source code context. Use when you have a repo URL and file path from the stack trace to understand the code causing the error."
+)
+def read_github_file_tool(repo_url: str, file_path: str, branch: str = "main") -> str:
+    """Read a file from GitHub to get source code context."""
+    logger.info(f"📄 Reading GitHub file: {repo_url}/{file_path}")
+    try:
+        from agents.context_agent import read_github_file
+        result = read_github_file(repo_url, file_path, branch)
+        # result is already a JSON string from the tool
+        parsed = json.loads(result)
+        if parsed.get("success"):
+            logger.info(f"✅ GitHub file read: {parsed.get('line_count', 0)} lines")
+        else:
+            logger.warning(f"⚠️ GitHub file read failed: {parsed.get('error', 'unknown')}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ GitHub file read error: {str(e)}")
+        return json.dumps({"success": False, "error": str(e)})
+
+
+# ============================================================================
 # ROOT CAUSE AGENT TOOL (Uses: Pattern DB, Bedrock Claude)
 # ============================================================================
 @tool(
@@ -353,6 +378,12 @@ Each specialist agent has unique tools for different aspects of error analysis.
 - Finds Stack Overflow Q&A
 - Fetches relevant documentation
 
+### 3b. GitHub File Reader (read_github_file_tool)
+**Tools:** GitHub Raw Content API
+- Reads source code files directly from GitHub repositories
+- Use when stack trace shows a file path and you have a repo URL
+- Provides actual code context to understand what's happening at the error location
+
 ### 4. Root Cause Agent (rootcause_agent_tool)
 **Tools:** Known patterns database, Bedrock Claude reasoning
 - Matches against database of known error patterns
@@ -387,25 +418,33 @@ For comprehensive error debugging:
 
 2. **PARSE ERROR** (parser_agent_tool)
    - Extract structure: language, type, stack frames
+   - **IMPORTANT**: Identify file paths and line numbers from stack trace
    - This feeds into other agents
 
 3. **SECURITY SCAN** (security_agent_tool)
    - Check for PII and secrets
    - Ensure safe to store and display
 
-4. **GET CONTEXT** (context_agent_tool)
-   - Search GitHub and Stack Overflow
+4. **READ SOURCE CODE** (read_github_file_tool) - When repo URL is available
+   - If user provides a GitHub repo URL or the error mentions one
+   - Read the files mentioned in the stack trace
+   - Get actual code context at the error location
+   - This dramatically improves root cause accuracy
+
+5. **GET CONTEXT** (context_agent_tool)
+   - Search GitHub Issues and Stack Overflow
    - Find community solutions
 
-5. **ANALYZE ROOT CAUSE** (rootcause_agent_tool)
+6. **ANALYZE ROOT CAUSE** (rootcause_agent_tool)
    - Match known patterns first
    - Use LLM reasoning for complex cases
+   - **Use the source code context from step 4 for better analysis**
 
-6. **GENERATE FIX** (fix_agent_tool)
+7. **GENERATE FIX** (fix_agent_tool)
    - Create code fix based on root cause
    - Validate syntax and suggest tests
 
-7. **UPDATE MEMORY** (store_pattern)
+8. **UPDATE MEMORY** (store_pattern)
    - Store new patterns learned
    - Track statistics
 
@@ -460,8 +499,11 @@ For comprehensive error debugging:
 - Always search memory first for instant solutions
 - Always parse before analyzing root cause
 - Always check security before storing in memory
+- **If a GitHub repo URL is mentioned or can be inferred, read the relevant source files**
+- **Use file paths from stack traces to read actual code for better context**
 - Store successful solutions in long-term memory
 - Provide specific, actionable code fixes
+- **NEVER say "language unknown" - use your best inference from the error patterns**
 """
 
 # ============================================================================
@@ -482,14 +524,15 @@ def build_tools_list():
     # Part 2: Advanced agents and features
     if FEATURE_PART >= 2:
         tools.extend([
-            context_agent_tool,  # GitHub, StackOverflow search
-            search_memory,       # Memory operations
+            context_agent_tool,      # GitHub Issues, StackOverflow search
+            read_github_file_tool,   # Read source files from GitHub repos
+            search_memory,           # Memory operations
             store_pattern,
             store_session,
-            record_stats,        # Statistics
+            record_stats,            # Statistics
             get_trend,
         ])
-        logger.info(f"🔧 Part 2 enabled: {len(tools)} tools loaded (including Memory, Context, Stats)")
+        logger.info(f"🔧 Part 2 enabled: {len(tools)} tools loaded (including Memory, Context, GitHub files, Stats)")
     else:
         logger.info(f"🔧 Part 1 enabled: {len(tools)} tools loaded (core agents only)")
     

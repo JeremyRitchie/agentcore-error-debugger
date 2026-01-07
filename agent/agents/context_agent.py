@@ -98,6 +98,181 @@ def search_stackoverflow(error_message: str, tags: str = "") -> str:
     return json.dumps(result)
 
 
+@tool(name="read_github_file")
+def read_github_file(repo_url: str, file_path: str, branch: str = "main") -> str:
+    """
+    Read a file from a GitHub repository to get more context about the error.
+    Fetches the raw file content to understand the code structure.
+    
+    Args:
+        repo_url: GitHub repository URL (e.g., "https://github.com/owner/repo" or "owner/repo")
+        file_path: Path to the file within the repository (e.g., "src/app.py")
+        branch: Branch name (default: "main")
+    
+    Returns:
+        JSON with file content and metadata
+    """
+    logger.info(f"📄 Reading file from GitHub: {repo_url}/{file_path}")
+    
+    if DEMO_MODE:
+        logger.info("📦 Demo mode: Using simulated file content")
+        return json.dumps(_get_simulated_file_content(repo_url, file_path))
+    
+    return json.dumps(_fetch_github_file(repo_url, file_path, branch))
+
+
+def _fetch_github_file(repo_url: str, file_path: str, branch: str = "main") -> Dict[str, Any]:
+    """Fetch file content from GitHub API."""
+    try:
+        # Parse repo URL to get owner/repo
+        if repo_url.startswith("https://github.com/"):
+            repo_path = repo_url.replace("https://github.com/", "").rstrip("/")
+        elif repo_url.startswith("github.com/"):
+            repo_path = repo_url.replace("github.com/", "").rstrip("/")
+        else:
+            repo_path = repo_url  # Assume owner/repo format
+        
+        # Remove .git suffix if present
+        repo_path = repo_path.replace(".git", "")
+        
+        # Build raw content URL
+        raw_url = f"https://raw.githubusercontent.com/{repo_path}/{branch}/{file_path}"
+        
+        headers = {
+            'User-Agent': 'ErrorDebugger/1.0',
+            'Accept': 'text/plain'
+        }
+        if GITHUB_TOKEN:
+            headers['Authorization'] = f'Bearer {GITHUB_TOKEN}'
+        
+        request = urllib.request.Request(raw_url, headers=headers)
+        
+        with urllib.request.urlopen(request, timeout=15) as response:
+            content = response.read().decode('utf-8')
+        
+        # Limit content size
+        max_lines = 200
+        lines = content.split('\n')
+        truncated = len(lines) > max_lines
+        if truncated:
+            content = '\n'.join(lines[:max_lines]) + f"\n\n... (truncated, {len(lines) - max_lines} more lines)"
+        
+        logger.info(f"✅ Fetched {len(lines)} lines from {file_path}")
+        
+        return {
+            "success": True,
+            "repo": repo_path,
+            "file_path": file_path,
+            "branch": branch,
+            "content": content,
+            "line_count": len(lines),
+            "truncated": truncated,
+            "url": f"https://github.com/{repo_path}/blob/{branch}/{file_path}",
+            "mode": "live"
+        }
+        
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {
+                "success": False,
+                "error": f"File not found: {file_path} in {repo_path}",
+                "suggestion": "Check the file path and branch name",
+                "mode": "live"
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"GitHub API error: {e.code} {e.reason}",
+                "mode": "live"
+            }
+    except Exception as e:
+        logger.error(f"❌ GitHub file fetch error: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "mode": "live"
+        }
+
+
+def _get_simulated_file_content(repo_url: str, file_path: str) -> Dict[str, Any]:
+    """Simulate file content for demo mode."""
+    # Detect file type
+    file_ext = file_path.split('.')[-1] if '.' in file_path else ''
+    
+    sample_content = {
+        "py": '''# Sample Python file
+def process_data(data):
+    """Process the input data."""
+    if data is None:
+        raise ValueError("Data cannot be None")
+    
+    results = []
+    for item in data:
+        # This could raise TypeError if item is not subscriptable
+        results.append(item["value"])
+    
+    return results
+
+class DataProcessor:
+    def __init__(self, config):
+        self.config = config
+    
+    def run(self):
+        data = self.fetch_data()
+        # Potential NoneType error if fetch_data returns None
+        return self.process(data)
+''',
+        "js": '''// Sample JavaScript file
+const fetchData = async (url) => {
+  const response = await fetch(url);
+  const data = await response.json();
+  
+  // This could throw if data.items is undefined
+  return data.items.map(item => ({
+    id: item.id,
+    name: item.name.toUpperCase()
+  }));
+};
+
+export const processItems = (items) => {
+  // items might be undefined
+  return items.filter(item => item.active);
+};
+''',
+        "ts": '''// Sample TypeScript file
+interface User {
+  id: number;
+  name: string;
+  email?: string;
+}
+
+export const getUser = async (id: number): Promise<User> => {
+  const response = await fetch(`/api/users/${id}`);
+  return response.json();
+};
+
+export const formatUser = (user: User): string => {
+  // email might be undefined
+  return `${user.name} <${user.email.toLowerCase()}>`;
+};
+'''
+    }
+    
+    content = sample_content.get(file_ext, f"// Sample {file_ext} file content\n// Unable to fetch real content in demo mode")
+    
+    return {
+        "success": True,
+        "repo": repo_url,
+        "file_path": file_path,
+        "branch": "main",
+        "content": content,
+        "line_count": len(content.split('\n')),
+        "truncated": False,
+        "note": "Demo mode - showing sample content. Set DEMO_MODE=false for real file fetching.",
+        "mode": "demo"
+    }
+
+
 @tool(name="fetch_documentation")
 def fetch_documentation(error_type: str, language: str) -> str:
     """
@@ -543,6 +718,7 @@ Find similar issues, community solutions, and relevant documentation.
 ## YOUR TOOLS
 - search_github_issues: Search GitHub Issues for similar error reports
 - search_stackoverflow: Search Stack Overflow for Q&A about this error
+- read_github_file: Read a specific file from a GitHub repository for context
 - fetch_documentation: Get official documentation links
 - get_error_explanation: Get human-readable explanation of the error type
 
@@ -568,7 +744,7 @@ Always return valid JSON only, no additional text.
 
 context_agent = Agent(
     system_prompt=CONTEXT_AGENT_PROMPT,
-    tools=[search_github_issues, search_stackoverflow, fetch_documentation, get_error_explanation],
+    tools=[search_github_issues, search_stackoverflow, read_github_file, fetch_documentation, get_error_explanation],
 )
 
 

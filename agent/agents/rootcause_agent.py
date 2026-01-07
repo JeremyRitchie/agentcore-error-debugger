@@ -195,41 +195,160 @@ Respond with a JSON object containing:
 
 
 def _fallback_analysis(error_text: str) -> Dict[str, Any]:
-    """Fallback root cause analysis without LLM."""
+    """Fallback root cause analysis without LLM - comprehensive pattern matching."""
     error_lower = error_text.lower()
     
-    # Simple heuristic analysis
-    if "undefined" in error_lower or "null" in error_lower:
+    # Check for specific error patterns with detailed analysis
+    
+    # Null/Undefined errors
+    if "cannot read propert" in error_lower and "undefined" in error_lower:
+        return {
+            "root_cause": "Accessing property on undefined object - likely async data not loaded",
+            "explanation": "Code is trying to access a property (like .map, .length, etc.) on an undefined value. This commonly happens when: 1) API data hasn't loaded yet, 2) Object path is wrong, 3) Optional chaining not used.",
+            "confidence": 85,
+            "likely_location": "The line accessing the property - check the stack trace for the exact location",
+            "contributing_factors": ["Missing null/undefined check", "Async race condition", "Wrong object path", "API returned null"]
+        }
+    elif "'nonetype' object has no attribute" in error_lower:
+        return {
+            "root_cause": "Method called on None in Python - function returned None unexpectedly",
+            "explanation": "A function returned None instead of an expected object, and then code tried to call a method or access an attribute on that None value.",
+            "confidence": 85,
+            "likely_location": "Check what function returned None - look one level up in the call stack",
+            "contributing_factors": ["Function missing return statement", "Error case returning None", "Failed API/DB call"]
+        }
+    elif "undefined" in error_lower or "null" in error_lower or "none" in error_lower:
         return {
             "root_cause": "Null or undefined value accessed",
             "explanation": "A variable or property is null/undefined when accessed. This commonly occurs with async data, optional values, or uninitialized variables.",
-            "confidence": 70,
+            "confidence": 75,
             "likely_location": "Property access or method call site",
             "contributing_factors": ["Missing null check", "Async timing issue", "Uninitialized variable"]
+        }
+    
+    # Import/Module errors
+    elif "no module named" in error_lower or "modulenotfounderror" in error_lower:
+        return {
+            "root_cause": "Python module not installed or not in path",
+            "explanation": "Python cannot find the specified module. Either it's not installed, or it's not in the Python path.",
+            "confidence": 90,
+            "likely_location": "The import statement at the top of the file",
+            "contributing_factors": ["Run 'pip install <module>'", "Activate virtual environment", "Check spelling of module name", "Check __init__.py exists for local modules"]
+        }
+    elif "cannot find module" in error_lower or "module_not_found" in error_lower:
+        return {
+            "root_cause": "Node.js module not found",
+            "explanation": "Node.js cannot locate the required module in node_modules or the specified path.",
+            "confidence": 90,
+            "likely_location": "The require() or import statement",
+            "contributing_factors": ["Run 'npm install'", "Check package.json", "Verify import path spelling", "Check if package exists"]
         }
     elif "import" in error_lower or "module" in error_lower:
         return {
             "root_cause": "Module import failure",
-            "explanation": "The application cannot find or load a required module. This can be due to missing dependencies, wrong paths, or circular imports.",
+            "explanation": "The application cannot find or load a required module.",
             "confidence": 75,
             "likely_location": "Import statement at top of file",
-            "contributing_factors": ["Missing npm install/pip install", "Wrong import path", "Typo in module name"]
+            "contributing_factors": ["Missing dependency installation", "Wrong import path", "Circular import"]
         }
-    elif "type" in error_lower and "error" in error_lower:
+    
+    # Type errors
+    elif "is not a function" in error_lower:
         return {
-            "root_cause": "Type mismatch",
-            "explanation": "An operation was performed on a value of unexpected type. This includes calling non-functions, wrong argument types, or unexpected data shapes.",
-            "confidence": 65,
-            "likely_location": "Function call or operation site",
-            "contributing_factors": ["Wrong argument type", "Function doesn't exist", "Unexpected data format"]
+            "root_cause": "Calling something that isn't a function",
+            "explanation": "Code tried to call something as a function, but it's actually undefined, null, or a different type. Common when: 1) Method name is misspelled, 2) Object doesn't have that method, 3) Import is wrong.",
+            "confidence": 85,
+            "likely_location": "The function call site in the stack trace",
+            "contributing_factors": ["Check method name spelling", "Verify object has the method", "Check import statement"]
         }
+    elif "typeerror" in error_lower:
+        return {
+            "root_cause": "Type mismatch - operation on wrong type",
+            "explanation": "An operation was performed on a value of unexpected type.",
+            "confidence": 70,
+            "likely_location": "Function call or operation site",
+            "contributing_factors": ["Wrong argument type", "Unexpected data format", "Missing type conversion"]
+        }
+    
+    # Syntax errors
+    elif "syntaxerror" in error_lower or "unexpected token" in error_lower:
+        return {
+            "root_cause": "Code syntax is invalid",
+            "explanation": "The code has a syntax error that prevents it from being parsed. This is usually a missing bracket, quote, or typo.",
+            "confidence": 90,
+            "likely_location": "The exact line/column mentioned in the error",
+            "contributing_factors": ["Missing closing bracket/brace/paren", "Unclosed string", "Typo in keyword", "Invalid character"]
+        }
+    
+    # Connection errors
+    elif "econnrefused" in error_lower or "connection refused" in error_lower:
+        return {
+            "root_cause": "Target service not running or not accepting connections",
+            "explanation": "The code tried to connect to a server/service that refused the connection. The target is either not running or blocking the connection.",
+            "confidence": 90,
+            "likely_location": "Network/API call in the code",
+            "contributing_factors": ["Start the target service", "Check host/port is correct", "Check firewall rules", "Verify network connectivity"]
+        }
+    elif "timeout" in error_lower or "etimedout" in error_lower:
+        return {
+            "root_cause": "Network operation timed out",
+            "explanation": "A network request took too long and was terminated. The server might be slow, unreachable, or overloaded.",
+            "confidence": 85,
+            "likely_location": "Network/API call in the code",
+            "contributing_factors": ["Increase timeout value", "Check server health", "Check network connectivity", "Implement retry logic"]
+        }
+    
+    # Permission errors
+    elif "permission denied" in error_lower or "eacces" in error_lower:
+        return {
+            "root_cause": "Insufficient permissions for file/resource access",
+            "explanation": "The process doesn't have permission to access the file, directory, or resource.",
+            "confidence": 90,
+            "likely_location": "File or resource access in the code",
+            "contributing_factors": ["Check file permissions (ls -la)", "Run with appropriate user", "chmod/chown the file", "Check SELinux/AppArmor"]
+        }
+    
+    # Key/Index errors
+    elif "keyerror" in error_lower:
+        return {
+            "root_cause": "Dictionary key doesn't exist",
+            "explanation": "Code tried to access a dictionary key that doesn't exist. The key name shown in the error is not in the dictionary.",
+            "confidence": 90,
+            "likely_location": "Dictionary access in the code",
+            "contributing_factors": ["Use dict.get(key, default)", "Check key exists first", "Verify data structure", "Check for typos in key name"]
+        }
+    elif "indexerror" in error_lower or "index out of" in error_lower:
+        return {
+            "root_cause": "Array/list index out of bounds",
+            "explanation": "Code tried to access an array/list index that doesn't exist. The list is shorter than expected.",
+            "confidence": 90,
+            "likely_location": "Array/list access in the code",
+            "contributing_factors": ["Check array length before access", "Verify data is populated", "Use safe access patterns", "Check loop bounds"]
+        }
+    
+    # Async errors
+    elif "[object promise]" in error_lower or "promise" in error_lower and "pending" in error_lower:
+        return {
+            "root_cause": "Missing await on async function",
+            "explanation": "An async function was called without 'await', so the code received a Promise object instead of the actual value.",
+            "confidence": 85,
+            "likely_location": "Async function call site",
+            "contributing_factors": ["Add 'await' before the async call", "Use .then() to handle Promise", "Make parent function async"]
+        }
+    
+    # Default fallback with better guidance
     else:
         return {
-            "root_cause": "Error requires detailed analysis",
-            "explanation": "The error pattern doesn't match common templates. Manual investigation recommended.",
-            "confidence": 30,
-            "likely_location": "Unknown",
-            "contributing_factors": ["Check stack trace", "Review recent changes", "Verify data flow"]
+            "root_cause": "Error requires source code analysis for precise diagnosis",
+            "explanation": "The error pattern doesn't match common templates. To provide accurate root cause analysis: 1) Check the stack trace for the exact file and line, 2) Review the code at that location, 3) Look at recent changes to that area.",
+            "confidence": 40,
+            "likely_location": "Check the stack trace - first file that's YOUR code (not library code)",
+            "contributing_factors": [
+                "Review the stack trace for exact location",
+                "Check recent git commits to affected files", 
+                "Add logging around the error location",
+                "Verify input data is as expected"
+            ]
         }
 
 

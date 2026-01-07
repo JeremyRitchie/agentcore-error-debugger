@@ -1292,12 +1292,39 @@ async function callAgentCoreBackend(errorText) {
             throw new Error(data.error || 'Unknown error from AgentCore');
         }
         
+        // Normalize response structure - agents might be at top level or inside fullResponse
+        // Check multiple possible locations for the agent data
+        let agents = data.agents;
+        if (!agents || Object.keys(agents).length === 0) {
+            agents = data.fullResponse?.agents;
+            console.log('📦 Found agents in fullResponse.agents');
+        }
+        if (!agents || Object.keys(agents).length === 0) {
+            agents = data.fullResponse?.fullResponse?.agents;
+            console.log('📦 Found agents in fullResponse.fullResponse.agents');
+        }
+        agents = agents || {};
+        
+        const summary = data.summary || data.fullResponse?.summary || agents.summary || {};
+        
         console.log('📥 AgentCore Response:', {
             eventCount: data.eventCount,
-            agentActivity: data.agentActivity,
-            agents: data.agents,
-            result: data.result?.substring?.(0, 500) || data.result
+            hasAgents: Object.keys(agents).length > 0,
+            agentKeys: Object.keys(agents),
+            parserData: agents.parser ? {
+                language: agents.parser.language,
+                confidence: agents.parser.confidence,
+                language_confidence: agents.parser.language_confidence,
+                error_message: agents.parser.error_message,
+                stack_frames_count: agents.parser.stack_frames?.length
+            } : 'NO PARSER DATA',
+            summaryLanguage: summary.language,
+            summaryConfidence: summary.languageConfidence
         });
+        
+        // Replace data.agents with normalized agents for downstream processing
+        data.agents = agents;
+        data.summary = summary;
         
         // Process agent activity for UI updates
         if (data.agentActivity) {
@@ -1439,44 +1466,54 @@ async function callAgentCoreBackend(errorText) {
                 };
             }
             
-            // Use summary for comprehensive display
-            if (data.agents.summary) {
-                const summary = data.agents.summary;
-                result.summary = summary;
+            // Use summary for comprehensive display (from agents.summary or top-level)
+            const summaryData = data.agents.summary || data.summary || {};
+            if (Object.keys(summaryData).length > 0) {
+                result.summary = summaryData;
                 
                 // Override with summary data if available (more reliable)
-                if (summary.language && summary.language !== 'unknown') {
-                    result.parsed.language = summary.language;
-                    result.parsed.languageConfidence = summary.languageConfidence || 0;
+                if (summaryData.language && summaryData.language !== 'unknown') {
+                    result.parsed.language = summaryData.language;
+                    result.parsed.languageConfidence = summaryData.languageConfidence || 0;
                 }
-                if (summary.errorType && summary.errorType !== 'unknown') {
-                    result.parsed.errorType = summary.errorType;
+                if (summaryData.errorType && summaryData.errorType !== 'unknown') {
+                    result.parsed.errorType = summaryData.errorType;
                 }
-                if (summary.coreMessage) {
-                    result.parsed.coreMessage = summary.coreMessage;
+                if (summaryData.coreMessage) {
+                    result.parsed.coreMessage = summaryData.coreMessage;
                 }
-                if (summary.rootCause) {
-                    result.rootCause.rootCause = summary.rootCause;
-                    result.rootCause.confidence = summary.rootCauseConfidence || 0;
-                    result.rootCause.solution = summary.solution || '';
+                if (summaryData.rootCause) {
+                    result.rootCause.rootCause = summaryData.rootCause;
+                    result.rootCause.confidence = summaryData.rootCauseConfidence || 0;
+                    result.rootCause.solution = summaryData.solution || '';
                 }
-                if (summary.fixAfter) {
-                    result.fix.fixType = summary.fixType || '';
-                    result.fix.before = summary.fixBefore || '';
-                    result.fix.after = summary.fixAfter || '';
-                    result.fix.explanation = summary.fixExplanation || '';
+                if (summaryData.fixAfter) {
+                    result.fix.fixType = summaryData.fixType || '';
+                    result.fix.before = summaryData.fixBefore || '';
+                    result.fix.after = summaryData.fixAfter || '';
+                    result.fix.explanation = summaryData.fixExplanation || '';
                 }
-                if (summary.riskLevel) {
-                    result.security.riskLevel = summary.riskLevel;
+                if (summaryData.riskLevel) {
+                    result.security.riskLevel = summaryData.riskLevel;
                 }
                 
-                console.log('📋 Summary applied:', summary);
+                console.log('📋 Summary applied:', summaryData);
             }
         }
         
-        // Also parse the final result text for any additional info
-        if (data.result && typeof data.result === 'string') {
+        // Only parse the result text as fallback if we don't have structured agent data
+        // This avoids overwriting correctly parsed agent data with markdown-extracted values
+        const hasStructuredAgentData = data.agents && (
+            data.agents.parser || 
+            data.agents.rootcause || 
+            data.agents.fix
+        );
+        
+        if (!hasStructuredAgentData && data.result && typeof data.result === 'string') {
+            console.log('⚠️ No structured agent data, falling back to markdown parsing');
             result = parseAgentResponse(data.result, result);
+        } else if (hasStructuredAgentData) {
+            console.log('✅ Using structured agent data (skipping markdown parsing)');
         }
         
         // Store raw response for debugging

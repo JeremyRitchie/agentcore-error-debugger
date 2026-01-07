@@ -37,6 +37,7 @@ import json
 import os
 import boto3
 import logging
+import uuid
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -91,8 +92,13 @@ def handler(event, context):
         
         request = json.loads(body) if isinstance(body, str) else body
         error_text = request.get('error_text', request.get('inputText', ''))
-        session_id = request.get('sessionId', 'default')
         github_repo = request.get('github_repo', '')
+        
+        # runtimeSessionId requires minimum 33 characters
+        # Generate a proper UUID-based session ID
+        client_session = request.get('sessionId', '')
+        session_id = f"session-{uuid.uuid4().hex}"  # 40 chars total (8 + 32)
+        logger.info(f"Client session: {client_session} -> Runtime session: {session_id}")
         
         if not error_text:
             return {

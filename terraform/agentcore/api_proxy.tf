@@ -85,11 +85,8 @@ except Exception as e:
 def handler(event, context):
     """Proxy requests to AgentCore Runtime via invoke_agent_runtime"""
     
-    # CORS headers for all responses
+    # Response headers (CORS handled by Lambda Function URL, don't duplicate)
     cors_headers = {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-        'Access-Control-Allow-Methods': 'POST',
         'Content-Type': 'application/json'
     }
     
@@ -450,7 +447,7 @@ def handler(event, context):
             # Last resort - return plain text error
             return {
                 'statusCode': 500,
-                'headers': {'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*'},
+                'headers': {'Content-Type': 'text/plain'},
                 'body': f'Error: {str(e)}'
             }
 PYTHON

@@ -119,9 +119,8 @@ def handler(event, context):
             'github_repo': github_repo
         })
         
-        # Call invoke_agent_runtime with correct parameter names
-        # Valid params: contentType, accept, mcpSessionId, runtimeSessionId, mcpProtocolVersion,
-        #               runtimeUserId, traceId, traceParent, traceState, baggage, agentRuntimeArn, qualifier, payload
+        # Call invoke_agent_runtime
+        logger.info("Calling invoke_agent_runtime...")
         response = agentcore_client.invoke_agent_runtime(
             agentRuntimeArn=AGENT_RUNTIME_ARN,
             payload=input_payload.encode('utf-8'),
@@ -129,19 +128,71 @@ def handler(event, context):
             contentType='application/json',
             accept='application/json'
         )
+        logger.info("✅ invoke_agent_runtime returned")
         
         # Log the full response structure for debugging
-        response_keys = list(response.keys())
+        response_keys = list(response.keys()) if response else []
         logger.info(f"AgentCore response keys: {response_keys}")
         
-        # Read the response payload (may be a StreamingBody)
-        result_bytes = response.get('payload', b'')
-        if hasattr(result_bytes, 'read'):
-            result_bytes = result_bytes.read()
+        content_type = response.get('contentType', '')
+        logger.info(f"Content-Type: {content_type}")
         
-        result_text = result_bytes.decode('utf-8') if isinstance(result_bytes, bytes) else str(result_bytes)
+        # The actual data is in response["response"], not "payload" or "responseStream"
+        result_chunks = []
         
-        logger.info(f"Response length: {len(result_text)}")
+        if "text/event-stream" in content_type:
+            # Handle streaming response (SSE format)
+            logger.info("Processing streaming response (text/event-stream)...")
+            response_body = response.get('response')
+            if response_body:
+                try:
+                    for line in response_body.iter_lines(chunk_size=1024):
+                        if line:
+                            line_text = line.decode('utf-8') if isinstance(line, bytes) else line
+                            logger.info(f"Stream line: {line_text[:200]}")
+                            # Strip "data: " prefix from SSE format
+                            if line_text.startswith('data: '):
+                                line_text = line_text[6:]
+                            result_chunks.append(line_text)
+                except Exception as stream_err:
+                    logger.error(f"Error reading stream: {stream_err}")
+        
+        elif content_type == "application/json":
+            # Handle standard JSON response
+            logger.info("Processing JSON response...")
+            response_body = response.get('response')
+            if response_body:
+                try:
+                    for chunk in response_body:
+                        chunk_text = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
+                        result_chunks.append(chunk_text)
+                        logger.info(f"JSON chunk: {len(chunk_text)} bytes")
+                except Exception as json_err:
+                    logger.error(f"Error reading JSON response: {json_err}")
+        
+        else:
+            # Fallback - try to read response directly
+            logger.info(f"Unknown content type: {content_type}, trying direct read...")
+            response_body = response.get('response', response.get('payload'))
+            if response_body:
+                if hasattr(response_body, 'read'):
+                    data = response_body.read()
+                    result_chunks.append(data.decode('utf-8') if isinstance(data, bytes) else str(data))
+                elif hasattr(response_body, 'iter_lines'):
+                    for line in response_body.iter_lines():
+                        if line:
+                            line_text = line.decode('utf-8') if isinstance(line, bytes) else line
+                            if line_text.startswith('data: '):
+                                line_text = line_text[6:]
+                            result_chunks.append(line_text)
+                elif isinstance(response_body, bytes):
+                    result_chunks.append(response_body.decode('utf-8'))
+                else:
+                    result_chunks.append(str(response_body))
+        
+        result_text = ''.join(result_chunks)
+        
+        logger.info(f"Total response length: {len(result_text)}")
         logger.info(f"Response (first 1000 chars): {result_text[:1000]}")
         
         # Check for empty response
@@ -162,13 +213,36 @@ def handler(event, context):
                 })
             }
         
-        # Try to parse as JSON
+        # The stream often contains multiple JSON objects or text chunks
+        # Try to extract the final result - often the last complete JSON object
+        result_json = None
+        
+        # First try parsing the whole thing as JSON
         try:
             result_json = json.loads(result_text)
-            logger.info(f"Parsed JSON keys: {list(result_json.keys()) if isinstance(result_json, dict) else 'not a dict'}")
-        except json.JSONDecodeError as jde:
-            logger.warning(f"Response is not JSON: {jde}")
-            result_json = {'result': result_text}
+            logger.info(f"Parsed as single JSON: {list(result_json.keys()) if isinstance(result_json, dict) else 'not a dict'}")
+        except json.JSONDecodeError:
+            # Try to find JSON objects in the streamed text
+            # The agent often yields multiple JSON objects or text lines
+            logger.info("Not single JSON, looking for embedded JSON...")
+            
+            # Split by newlines and look for JSON
+            for line in result_text.strip().split('\n'):
+                line = line.strip()
+                if line.startswith('{') and line.endswith('}'):
+                    try:
+                        candidate = json.loads(line)
+                        # Keep the last/most complete JSON
+                        if isinstance(candidate, dict):
+                            if 'result' in candidate or 'parsed_info' in candidate or 'root_cause' in candidate:
+                                result_json = candidate
+                                logger.info(f"Found result JSON: {list(candidate.keys())}")
+                    except:
+                        pass
+            
+            if not result_json:
+                # Just wrap the raw text
+                result_json = {'rawResult': result_text}
         
         # Return the full response for debugging
         return {
@@ -176,9 +250,10 @@ def handler(event, context):
             'headers': cors_headers,
             'body': json.dumps({
                 'success': True,
-                'result': result_json.get('result', result_text) if isinstance(result_json, dict) else result_text,
+                'result': result_json.get('result', result_json) if isinstance(result_json, dict) else result_text,
                 'fullResponse': result_json,
-                'rawText': result_text[:2000],  # First 2000 chars for debugging
+                'rawText': result_text[:5000],  # First 5000 chars for debugging
+                'chunkCount': len(result_chunks),
                 'traces': result_json.get('traces', []) if isinstance(result_json, dict) else [],
                 'sessionId': session_id
             })

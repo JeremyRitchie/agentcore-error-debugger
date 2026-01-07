@@ -93,11 +93,13 @@ jobs:
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           REPO_URL="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${PROJECT_NAME}-${ENVIRONMENT}-agent"
           
-          echo "🐳 Building multi-agent container for ARM64..."
+          echo "🐳 Building multi-agent container for ARM64 (with cache)..."
           cd agent
           docker buildx build \
             --platform linux/arm64 \
             --push \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
             -t ${REPO_URL}:latest \
             -t ${REPO_URL}:${{ github.sha }} \
             .

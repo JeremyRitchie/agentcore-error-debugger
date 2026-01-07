@@ -631,7 +631,7 @@ function displayResults(result) {
     }
     
     // Summary section (top-level overview)
-    if (result.summary) {
+    if (result.summary && Object.keys(result.summary).length > 0) {
         const s = result.summary;
         const confidenceBadge = s.rootCauseConfidence >= 80 ? 'positive' : 
                                 s.rootCauseConfidence >= 50 ? 'warning' : 'info';

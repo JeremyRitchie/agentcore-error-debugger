@@ -204,9 +204,13 @@ def handler(event, context):
                             if line_text.startswith('data: '):
                                 data = line_text[6:]
                                 
-                                # Log first 10 events for debugging
-                                if event_count <= 10:
+                                # Log sample events for debugging (first 10 and last 10)
+                                if event_count <= 10 or '_agentcore_final_result' in data:
                                     sample_events.append(data[:500])
+                                # Keep a sliding window of last events
+                                if len(sample_events) > 25:
+                                    # Keep first 10 and last 15
+                                    sample_events = sample_events[:10] + sample_events[-15:]
                                 
                                 try:
                                     parsed = json.loads(data)
@@ -225,16 +229,42 @@ def handler(event, context):
                                     
                                     event_str = str(parsed)
                                     
+                                    # FIRST: Check for our final result marker (most important)
+                                    # The supervisor yields this with "_agentcore_final_result": True
+                                    if parsed.get('_agentcore_final_result') == True:
+                                        # This is THE final structured result from supervisor
+                                        logger.info("🎯 Found final structured result with marker!")
+                                        agents_data = parsed.get('agents', {})
+                                        if isinstance(agents_data, dict):
+                                            agent_results['parser'] = agents_data.get('parser')
+                                            agent_results['security'] = agents_data.get('security')
+                                            agent_results['context'] = agents_data.get('context')
+                                            agent_results['rootcause'] = agents_data.get('rootcause')
+                                            agent_results['fix'] = agents_data.get('fix')
+                                            agent_results['memory'] = agents_data.get('memory')
+                                            agent_results['stats'] = agents_data.get('stats')
+                                            logger.info(f"🎯 Extracted agents: {[k for k, v in agent_results.items() if v]}")
+                                        if 'summary' in parsed:
+                                            agent_results['summary'] = parsed.get('summary')
+                                        final_result = parsed
+                                        continue  # Don't process further
+                                    
                                     # Capture tool calls - remember which tool is being called
-                                    # Look for various indicators of tool use
-                                    if any(x in event_str for x in ['toolUse', 'tool_use', '"name":', 'function_call']):
+                                    # Look for specific tool use patterns (avoid matching user data)
+                                    elif 'toolUse' in event_str or 'tool_use' in event_str:
                                         # Extract tool name using regex (safest approach)
                                         import re
                                         match = re.search(r'"name":\s*"([^"]+)"', event_str)
                                         if match:
                                             tool_name = match.group(1)
-                                            # Filter out non-tool names
-                                            if tool_name and len(tool_name) > 2 and not tool_name.startswith('content'):
+                                            # Only accept known tool names (filter out user data like "John")
+                                            valid_tool_patterns = ['parser', 'security', 'context', 'rootcause', 'fix', 
+                                                                   'memory', 'stats', 'github', 'search', 'analyze',
+                                                                   'record', 'store', 'evaluate', 'update', 'generate']
+                                            tool_lower = tool_name.lower()
+                                            is_valid_tool = any(p in tool_lower for p in valid_tool_patterns)
+                                            
+                                            if tool_name and is_valid_tool:
                                                 current_tool = tool_name
                                                 agent_activity.append({
                                                     'type': 'tool_call',
@@ -289,25 +319,6 @@ def handler(event, context):
                                         except Exception as te:
                                             logger.warning(f"Failed to parse tool result: {te}")
                                     
-                                    # Check for our SPECIFIC final result marker
-                                    # The supervisor yields this with "_agentcore_final_result": True
-                                    elif parsed.get('_agentcore_final_result') == True:
-                                        # This is THE final structured result from supervisor
-                                        logger.info("🎯 Found final structured result with marker!")
-                                        agents_data = parsed.get('agents', {})
-                                        if isinstance(agents_data, dict):
-                                            agent_results['parser'] = agents_data.get('parser')
-                                            agent_results['security'] = agents_data.get('security')
-                                            agent_results['context'] = agents_data.get('context')
-                                            agent_results['rootcause'] = agents_data.get('rootcause')
-                                            agent_results['fix'] = agents_data.get('fix')
-                                            agent_results['memory'] = agents_data.get('memory')
-                                            agent_results['stats'] = agents_data.get('stats')
-                                            logger.info(f"🎯 Extracted agents: {[k for k, v in agent_results.items() if v]}")
-                                        if 'summary' in parsed:
-                                            agent_results['summary'] = parsed.get('summary')
-                                        final_result = parsed
-                                    
                                     # Capture final message
                                     elif 'message' in parsed:
                                         msg = parsed.get('message')
@@ -328,7 +339,9 @@ def handler(event, context):
                     
                     # Log details about what we captured for debugging
                     if not captured:
-                        logger.warning("⚠️ No agent results captured! Looking for '_agentcore_final_result' marker in events...")
+                        logger.warning("⚠️ No agent results captured! Looking for '_agentcore_final_result' marker...")
+                        # Log last 3 sample events to see what we received
+                        logger.warning(f"Last sample events: {sample_events[-3:] if sample_events else 'none'}")
                     else:
                         logger.info(f"✅ Successfully captured {len(captured)} agent results")
                     
@@ -342,7 +355,18 @@ def handler(event, context):
                     }
                     
                     if final_result and isinstance(final_result, dict):
-                        response_data['result'] = final_result.get('result', str(final_result))
+                        # Use a clean result message, not Python repr
+                        result_text = final_result.get('result')
+                        if not result_text:
+                            # Generate a clean summary from the data
+                            summary_data = final_result.get('summary', {})
+                            if summary_data:
+                                root_cause = summary_data.get('rootCause', '')[:100]
+                                confidence = summary_data.get('rootCauseConfidence', 0)
+                                result_text = f"Analysis complete: {root_cause} ({confidence}% confidence)"
+                            else:
+                                result_text = f"Analysis complete ({event_count} events processed)"
+                        response_data['result'] = result_text
                         response_data['fullResponse'] = final_result
                         # Ensure summary is at top level
                         if 'summary' in final_result:

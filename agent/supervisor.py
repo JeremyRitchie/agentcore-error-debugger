@@ -1169,6 +1169,7 @@ async def error_debugger(payload, context):
         user_input = payload.get("prompt", "") if isinstance(payload, dict) else str(payload)
         session_id = payload.get("session_id", "unknown") if isinstance(payload, dict) else "unknown"
         mode = payload.get("mode", "comprehensive") if isinstance(payload, dict) else "comprehensive"
+        github_repo = payload.get("github_repo", "") if isinstance(payload, dict) else ""
         
         # Store original error in session context
         session_context["original_error"] = user_input
@@ -1178,28 +1179,34 @@ async def error_debugger(payload, context):
         
         yield f"🔍 Starting error analysis...\n"
         yield f"📋 Mode: {mode}\n"
+        if github_repo:
+            yield f"📂 Repository: {github_repo}\n"
         
         if not user_input:
             yield "❌ Error: No error text provided\n"
             return
         
         logger.info(f"Input: {user_input[:200]}...")
+        if github_repo:
+            logger.info(f"GitHub repo: {github_repo}")
         
         # Bypass tool consent for automation
         os.environ["BYPASS_TOOL_CONSENT"] = "true"
         
-        # Build prompt
+        # Build prompt with optional repo context
+        repo_context = f"\nGitHub Repository: {github_repo}" if github_repo else ""
+        
         if mode == "quick":
             prompt = f"""Quickly analyze this error:
 
-ERROR: {user_input}
+ERROR: {user_input}{repo_context}
 
 Run: parser, security, root cause, fix. Skip external searches.
 """
         else:
             prompt = f"""Comprehensively debug this error:
 
-ERROR: {user_input}
+ERROR: {user_input}{repo_context}
 
 Follow the full analysis workflow with all agents.
 """

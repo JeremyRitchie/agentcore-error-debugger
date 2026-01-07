@@ -857,14 +857,13 @@ function generateRelevantResources(errorType, language, encodedQuery, searchQuer
     // NO static error type mapping - just create search URLs from the actual error
     // Real search is done by backend context agent
     
-    // Extract key terms from error message (first line or first 100 chars)
-    const errorLine = errorMessage.split('\n')[0].substring(0, 100);
-    const searchQuery = encodeURIComponent(errorLine);
+    // Use the searchQuery passed in (already extracted from error)
+    const displayQuery = searchQuery.substring(0, 50);
     
     // GitHub search link
     github.push({
-        title: `Search GitHub for: "${errorLine.substring(0, 50)}..."`,
-        url: `https://github.com/search?q=${searchQuery}&type=issues`,
+        title: `Search GitHub for: "${displayQuery}..."`,
+        url: `https://github.com/search?q=${encodedQuery}&type=issues`,
         relevance: 80,
         tags: ['search'],
         source: 'github',
@@ -875,7 +874,7 @@ function generateRelevantResources(errorType, language, encodedQuery, searchQuer
     if (language && language !== 'unknown') {
         github.push({
             title: `${language} issues matching this error`,
-            url: `https://github.com/search?q=${searchQuery}+language:${language}&type=issues`,
+            url: `https://github.com/search?q=${encodedQuery}+language:${language}&type=issues`,
             relevance: 75,
             tags: ['language-specific'],
             source: 'github',
@@ -884,8 +883,8 @@ function generateRelevantResources(errorType, language, encodedQuery, searchQuer
     
     // Stack Overflow search link
     stackoverflow.push({
-        title: `Search Stack Overflow for: "${errorLine.substring(0, 50)}..."`,
-        url: `https://stackoverflow.com/search?q=${searchQuery}`,
+        title: `Search Stack Overflow for: "${displayQuery}..."`,
+        url: `https://stackoverflow.com/search?q=${encodedQuery}`,
         score: 0,
         answers: 0,
         accepted: false,

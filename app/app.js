@@ -10,11 +10,23 @@
 // ===== Configuration =====
 const CONFIG = {
     apiEndpoint: window.AGENTCORE_CONFIG?.apiEndpoint || '/api',
+    logsApiEndpoint: window.AGENTCORE_CONFIG?.logsApiEndpoint || null,
     sessionId: 'sess_' + Math.random().toString(36).substring(2, 10),
     // Demo mode: true unless the AgentCore backend is available
     demoMode: window.AGENTCORE_CONFIG?.demoMode ?? true,
     githubRawUrl: 'https://raw.githubusercontent.com',
     githubApiUrl: 'https://api.github.com',
+    // CloudWatch log groups (set by Terraform output)
+    logGroups: window.AGENTCORE_CONFIG?.logGroups || {
+        runtime:  '/aws/bedrock-agentcore/error-debugger',
+        gateway:  '/aws/bedrock-agentcore/error-debugger-gateway',
+        parser:   '/aws/lambda/error-debugger-parser',
+        security: '/aws/lambda/error-debugger-security',
+        context:  '/aws/lambda/error-debugger-context',
+        stats:    '/aws/lambda/error-debugger-stats',
+    },
+    // AWS Region for CloudWatch
+    awsRegion: window.AGENTCORE_CONFIG?.region || 'us-east-1',
 };
 
 // ===== Feature Flags (Blog Post Parts) =====
@@ -110,6 +122,16 @@ const state = {
     // GitHub actions results
     createdIssue: null,
     createdPR: null,
+    // CloudWatch logs
+    logs: {
+        entries: [],          // All log entries
+        selectedComponent: 'all',
+        isLoading: false,
+        lastFetch: null,
+        autoRefresh: false,
+        autoRefreshInterval: null,
+        showErrorsOnly: false,
+    },
 };
 
 // ===== Pre-seeded Memory =====
@@ -1175,6 +1197,11 @@ async function runAnalysis() {
         displayResults(result);
         updateMemoryDisplay();
         els.copyBtn.disabled = false;
+        
+        // Fetch logs after analysis completes
+        setTimeout(() => {
+            LogsManager.fetchLogs();
+        }, 500);
     } catch (error) {
         console.error('Analysis failed:', error);
         els.resultsContent.innerHTML = `
@@ -1375,6 +1402,315 @@ function copyResults() {
     alert('Results copied to clipboard!');
 }
 
+// ===== CloudWatch Logs =====
+
+const LogsManager = {
+    els: {},
+    
+    init() {
+        this.els = {
+            container: document.getElementById('logsContainer'),
+            tabs: document.getElementById('logsTabs'),
+            status: document.getElementById('logsStatus'),
+            info: document.getElementById('logsInfo'),
+            refreshBtn: document.getElementById('refreshLogsBtn'),
+            autoRefreshBtn: document.getElementById('autoRefreshBtn'),
+            errorsOnlyCheckbox: document.getElementById('showErrorsOnly'),
+        };
+        
+        // Tab click handlers
+        this.els.tabs?.querySelectorAll('.log-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                this.selectComponent(tab.dataset.component);
+            });
+        });
+        
+        // Refresh button
+        this.els.refreshBtn?.addEventListener('click', () => this.fetchLogs());
+        
+        // Auto-refresh toggle
+        this.els.autoRefreshBtn?.addEventListener('click', () => this.toggleAutoRefresh());
+        
+        // Errors only filter
+        this.els.errorsOnlyCheckbox?.addEventListener('change', (e) => {
+            state.logs.showErrorsOnly = e.target.checked;
+            this.renderLogs();
+        });
+    },
+    
+    selectComponent(component) {
+        state.logs.selectedComponent = component;
+        
+        // Update tab UI
+        this.els.tabs?.querySelectorAll('.log-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.component === component);
+        });
+        
+        // Re-render logs
+        this.renderLogs();
+    },
+    
+    setStatus(status, message) {
+        if (this.els.status) {
+            this.els.status.textContent = message;
+            this.els.status.className = `logs-status ${status}`;
+        }
+    },
+    
+    async fetchLogs() {
+        if (state.logs.isLoading) return;
+        
+        state.logs.isLoading = true;
+        this.setStatus('loading', 'Fetching...');
+        this.showLoading();
+        
+        try {
+            // In demo mode, generate simulated logs
+            if (CONFIG.demoMode) {
+                await this.fetchSimulatedLogs();
+            } else {
+                await this.fetchCloudWatchLogs();
+            }
+            
+            state.logs.lastFetch = new Date();
+            this.setStatus('success', `Updated ${state.logs.lastFetch.toLocaleTimeString()}`);
+            this.renderLogs();
+        } catch (error) {
+            console.error('Failed to fetch logs:', error);
+            this.setStatus('error', `Error: ${error.message}`);
+            this.showError(error.message);
+        } finally {
+            state.logs.isLoading = false;
+        }
+    },
+    
+    async fetchCloudWatchLogs() {
+        // If no logs API endpoint configured, fall back to simulated
+        if (!CONFIG.logsApiEndpoint) {
+            console.log('No logs API endpoint configured, using simulated logs');
+            return this.fetchSimulatedLogs();
+        }
+        
+        // Call the backend API to fetch CloudWatch logs
+        const response = await fetch(`${CONFIG.logsApiEndpoint}/logs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                components: Object.keys(CONFIG.logGroups),
+                limit: 100,
+                startTime: Date.now() - (60 * 60 * 1000), // Last hour
+            }),
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`API error ${response.status}: ${errorText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Unknown error');
+        }
+        
+        state.logs.entries = this.parseCloudWatchLogs(data.logs || []);
+        
+        // Log any component-specific errors
+        if (data.errors?.length > 0) {
+            console.warn('Some log fetches failed:', data.errors);
+        }
+    },
+    
+    async fetchSimulatedLogs() {
+        // Simulate network delay
+        await new Promise(r => setTimeout(r, 500));
+        
+        // Generate simulated logs based on current analysis state
+        const now = Date.now();
+        const logs = [];
+        
+        const components = ['runtime', 'gateway', 'parser', 'security', 'context', 'stats'];
+        const levels = ['INFO', 'INFO', 'INFO', 'WARN', 'ERROR'];
+        
+        // If we've run an analysis, generate logs for that
+        if (state.shortTermMemory.length > 0) {
+            const analysis = state.shortTermMemory[state.shortTermMemory.length - 1];
+            
+            logs.push(
+                { timestamp: now - 5000, component: 'gateway', level: 'INFO', message: 'Received analysis request' },
+                { timestamp: now - 4800, component: 'runtime', level: 'INFO', message: '🚀 Error Debugger started (mode: comprehensive)' },
+                { timestamp: now - 4600, component: 'runtime', level: 'INFO', message: `📥 Input: ${analysis.errorType} error detected` },
+                { timestamp: now - 4400, component: 'parser', level: 'INFO', message: `Parsing error text (${Math.floor(Math.random() * 500 + 100)} chars)` },
+                { timestamp: now - 4200, component: 'parser', level: 'INFO', message: `✅ Detected language: ${analysis.language}` },
+                { timestamp: now - 4000, component: 'security', level: 'INFO', message: 'Scanning for PII and secrets...' },
+                { timestamp: now - 3800, component: 'security', level: 'INFO', message: '✅ Security scan complete - no sensitive data found' },
+                { timestamp: now - 3500, component: 'runtime', level: 'INFO', message: '🎯 Invoking RootCauseAgent' },
+                { timestamp: now - 3200, component: 'runtime', level: 'INFO', message: `✅ RootCauseAgent returned: 85% confidence` },
+                { timestamp: now - 3000, component: 'runtime', level: 'INFO', message: `🔧 Invoking FixAgent for ${analysis.language}` },
+                { timestamp: now - 2700, component: 'runtime', level: 'INFO', message: '✅ FixAgent returned: null_check fix' },
+                { timestamp: now - 2500, component: 'stats', level: 'INFO', message: `Recording ${analysis.errorType} occurrence` },
+                { timestamp: now - 2300, component: 'gateway', level: 'INFO', message: 'Analysis complete, streaming response' },
+            );
+        }
+        
+        // Add some background noise logs
+        for (let i = 0; i < 15; i++) {
+            const component = components[Math.floor(Math.random() * components.length)];
+            const level = levels[Math.floor(Math.random() * levels.length)];
+            const offset = Math.floor(Math.random() * 60000);
+            
+            const messages = {
+                runtime: ['Heartbeat check', 'Memory usage: 245MB', 'Active sessions: 1', 'Tool execution complete'],
+                gateway: ['Health check OK', 'Route matched: /analyze', 'Request authenticated', 'Response sent'],
+                parser: ['Regex pattern matched', 'Stack frame extracted', 'Language detected', 'Classification complete'],
+                security: ['PII scan started', 'No secrets found', 'Risk level: low', 'Scan complete'],
+                context: ['GitHub API call', 'StackOverflow search', 'Results cached', 'Context retrieved'],
+                stats: ['Stats recorded', 'DynamoDB write', 'Trend calculated', 'Frequency updated'],
+            };
+            
+            const componentMessages = messages[component] || ['Processing...'];
+            const message = componentMessages[Math.floor(Math.random() * componentMessages.length)];
+            
+            logs.push({
+                timestamp: now - offset,
+                component,
+                level,
+                message: level === 'ERROR' ? `❌ ${message} failed` : 
+                         level === 'WARN' ? `⚠️ ${message} (warning)` : message,
+            });
+        }
+        
+        // Sort by timestamp descending (newest first)
+        logs.sort((a, b) => b.timestamp - a.timestamp);
+        
+        state.logs.entries = logs;
+    },
+    
+    parseCloudWatchLogs(rawLogs) {
+        return rawLogs.map(log => {
+            // Determine component from log group name
+            let component = 'runtime';
+            if (log.logGroup?.includes('gateway')) component = 'gateway';
+            else if (log.logGroup?.includes('parser')) component = 'parser';
+            else if (log.logGroup?.includes('security')) component = 'security';
+            else if (log.logGroup?.includes('context')) component = 'context';
+            else if (log.logGroup?.includes('stats')) component = 'stats';
+            
+            // Determine level from message
+            let level = 'INFO';
+            const msg = log.message || '';
+            if (msg.includes('ERROR') || msg.includes('❌')) level = 'ERROR';
+            else if (msg.includes('WARN') || msg.includes('⚠️')) level = 'WARN';
+            
+            return {
+                timestamp: log.timestamp,
+                component,
+                level,
+                message: msg,
+            };
+        });
+    },
+    
+    renderLogs() {
+        if (!this.els.container) return;
+        
+        let entries = state.logs.entries;
+        
+        // Filter by component
+        if (state.logs.selectedComponent !== 'all') {
+            entries = entries.filter(e => e.component === state.logs.selectedComponent);
+        }
+        
+        // Filter by errors only
+        if (state.logs.showErrorsOnly) {
+            entries = entries.filter(e => e.level === 'ERROR' || e.level === 'WARN');
+        }
+        
+        // Update count
+        if (this.els.info) {
+            this.els.info.textContent = `${entries.length} entries`;
+        }
+        
+        if (entries.length === 0) {
+            this.els.container.innerHTML = `
+                <div class="logs-empty">
+                    <span class="empty-icon">📋</span>
+                    <p>No logs found${state.logs.selectedComponent !== 'all' ? ` for ${state.logs.selectedComponent}` : ''}</p>
+                    <p class="hint">${state.logs.showErrorsOnly ? 'Try disabling "Errors only" filter' : 'Click "Refresh" to fetch latest logs'}</p>
+                </div>
+            `;
+            return;
+        }
+        
+        this.els.container.innerHTML = entries.map(entry => `
+            <div class="cloudwatch-log-entry ${entry.level.toLowerCase()}">
+                <span class="log-timestamp">${this.formatTimestamp(entry.timestamp)}</span>
+                <span class="log-component ${entry.component}">${entry.component}</span>
+                <span class="log-message ${entry.level === 'ERROR' ? 'error' : ''}">${escapeHtml(entry.message)}</span>
+            </div>
+        `).join('');
+    },
+    
+    showLoading() {
+        if (!this.els.container) return;
+        
+        const skeletons = Array(8).fill(null).map(() => `
+            <div class="log-skeleton">
+                <span class="sk-time"></span>
+                <span class="sk-component"></span>
+                <span class="sk-message"></span>
+            </div>
+        `).join('');
+        
+        this.els.container.innerHTML = skeletons;
+    },
+    
+    showError(message) {
+        if (!this.els.container) return;
+        
+        this.els.container.innerHTML = `
+            <div class="logs-empty">
+                <span class="empty-icon">❌</span>
+                <p>Failed to fetch logs</p>
+                <p class="hint">${escapeHtml(message)}</p>
+            </div>
+        `;
+    },
+    
+    formatTimestamp(ts) {
+        const date = new Date(ts);
+        return date.toLocaleTimeString('en-US', { 
+            hour12: false, 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit',
+            fractionalSecondDigits: 3,
+        });
+    },
+    
+    toggleAutoRefresh() {
+        state.logs.autoRefresh = !state.logs.autoRefresh;
+        
+        if (this.els.autoRefreshBtn) {
+            this.els.autoRefreshBtn.textContent = state.logs.autoRefresh ? '⏸️ Stop' : '▶️ Auto';
+        }
+        
+        if (state.logs.autoRefresh) {
+            // Start auto-refresh every 5 seconds
+            this.fetchLogs();
+            state.logs.autoRefreshInterval = setInterval(() => {
+                this.fetchLogs();
+            }, 5000);
+        } else {
+            // Stop auto-refresh
+            if (state.logs.autoRefreshInterval) {
+                clearInterval(state.logs.autoRefreshInterval);
+                state.logs.autoRefreshInterval = null;
+            }
+        }
+    },
+};
+
 // ===== Initialization =====
 
 function applyFeatureFlags() {
@@ -1418,6 +1754,7 @@ function applyFeatureFlags() {
 function init() {
     console.log('🔍 Error Debugger initializing...');
     console.log(`📌 Running Part ${FEATURES.PART} features`);
+    console.log(`📋 Log groups configured:`, CONFIG.logGroups);
     
     initElements();
     
@@ -1433,6 +1770,9 @@ function init() {
     if (FEATURES.MEMORY_ENABLED) {
         updateMemoryDisplay();
     }
+    
+    // Initialize CloudWatch Logs manager
+    LogsManager.init();
     
     // Event listeners
     els.analyzeBtn?.addEventListener('click', runAnalysis);

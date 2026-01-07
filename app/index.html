@@ -303,6 +303,48 @@ TypeError: Cannot read properties of undefined (reading 'map')
                 </div>
             </div>
         </section>
+
+        <!-- CloudWatch Logs Panel -->
+        <section class="panel logs-panel">
+            <div class="panel-header">
+                <h2>📋 CloudWatch Logs</h2>
+                <div class="logs-controls">
+                    <span class="logs-status" id="logsStatus">Ready</span>
+                    <button class="btn-ghost btn-sm" id="refreshLogsBtn" title="Refresh logs">
+                        🔄 Refresh
+                    </button>
+                    <button class="btn-ghost btn-sm" id="autoRefreshBtn" title="Toggle auto-refresh">
+                        ⏸️ Auto
+                    </button>
+                </div>
+            </div>
+            <div class="logs-tabs" id="logsTabs">
+                <button class="log-tab active" data-component="all">All</button>
+                <button class="log-tab" data-component="runtime">Runtime</button>
+                <button class="log-tab" data-component="gateway">Gateway</button>
+                <button class="log-tab" data-component="parser">Parser λ</button>
+                <button class="log-tab" data-component="security">Security λ</button>
+                <button class="log-tab" data-component="context">Context λ</button>
+                <button class="log-tab" data-component="stats">Stats λ</button>
+            </div>
+            <div class="panel-body logs-body">
+                <div class="logs-container" id="logsContainer">
+                    <div class="logs-empty">
+                        <span class="empty-icon">📋</span>
+                        <p>Click "Refresh" to fetch latest logs</p>
+                        <p class="hint">Logs are fetched from CloudWatch</p>
+                    </div>
+                </div>
+            </div>
+            <div class="logs-footer">
+                <span class="logs-info" id="logsInfo">0 entries</span>
+                <span class="logs-filter">
+                    <label>
+                        <input type="checkbox" id="showErrorsOnly"> Errors only
+                    </label>
+                </span>
+            </div>
+        </section>
     </div>
 
     <script src="app.js"></script>

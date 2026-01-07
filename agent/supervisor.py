@@ -106,6 +106,48 @@ logger.info(f"   Agents: {'7 (full)' if FEATURE_PART >= 2 else '5 (core)'}")
 logger.info("=" * 60)
 
 # ============================================================================
+# Component Status Tracking
+# ============================================================================
+# This tracks the status of each component and streams it to the frontend
+component_status = {
+    "supervisor": {"status": "idle", "message": None, "error": None},
+    "parser": {"status": "idle", "message": None, "error": None},
+    "security": {"status": "idle", "message": None, "error": None},
+    "context": {"status": "idle", "message": None, "error": None},
+    "github_file": {"status": "idle", "message": None, "error": None},
+    "rootcause": {"status": "idle", "message": None, "error": None},
+    "fix": {"status": "idle", "message": None, "error": None},
+    "memory": {"status": "idle", "message": None, "error": None},
+    "stats": {"status": "idle", "message": None, "error": None},
+}
+
+def reset_component_status():
+    """Reset all component status to idle."""
+    for key in component_status:
+        component_status[key] = {"status": "idle", "message": None, "error": None}
+
+def update_component_status(component: str, status: str, message: str = None, error: str = None):
+    """Update a component's status and log it."""
+    component_status[component] = {
+        "status": status,
+        "message": message,
+        "error": error,
+    }
+    if status == "running":
+        logger.info(f"🔄 [{component.upper()}] Starting: {message or 'Processing...'}")
+    elif status == "success":
+        logger.info(f"✅ [{component.upper()}] Success: {message or 'Complete'}")
+    elif status == "error":
+        logger.error(f"❌ [{component.upper()}] Error: {error or 'Unknown error'}")
+    elif status == "skipped":
+        logger.info(f"⏭️ [{component.upper()}] Skipped: {message or 'Not needed'}")
+
+def format_status_update(component: str) -> str:
+    """Format a status update as a JSON string for streaming."""
+    import json
+    return f"\n[[STATUS:{json.dumps({'component': component, **component_status[component]})}]]\n"
+
+# ============================================================================
 # Tool Execution Callback
 # ============================================================================
 def event_loop_tracker(**kwargs):
@@ -121,6 +163,9 @@ def event_loop_tracker(**kwargs):
             
             # Context Agent Tools
             "context_agent_tool": "🔍 EXECUTING: Context Agent (GitHub, StackOverflow search)",
+            
+            # GitHub File Reader
+            "read_github_file_tool": "📄 EXECUTING: Reading file from GitHub repository",
             
             # Root Cause Agent Tools
             "rootcause_agent_tool": "🎯 EXECUTING: Root Cause Agent (pattern matching, LLM analysis)",
@@ -154,14 +199,21 @@ def event_loop_tracker(**kwargs):
 )
 def parser_agent_tool(error_text: str) -> str:
     """Call Parser Lambda via Gateway to parse error messages."""
-    logger.info(f"📋 Calling Parser Lambda via Gateway ({len(error_text)} chars)")
+    update_component_status("parser", "running", f"Parsing {len(error_text)} chars...")
     try:
         result = gateway_tools.parse_error(error_text)
-        logger.info(f"✅ Parser Lambda returned: {result.get('error_type', 'unknown')}")
-        return json.dumps(result)
+        error_type = result.get('error_type', 'unknown')
+        language = result.get('language', 'unknown')
+        
+        if result.get('error'):
+            update_component_status("parser", "error", error=result.get('error'))
+            return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        update_component_status("parser", "success", f"Detected: {language} | {error_type}")
+        return json.dumps({"success": True, **result})
     except Exception as e:
-        logger.error(f"❌ Parser Lambda error: {str(e)}")
-        return json.dumps({"error": str(e), "error_type": "unknown"})
+        update_component_status("parser", "error", error=str(e))
+        return json.dumps({"success": False, "error": str(e), "error_type": "unknown"})
 
 
 # ============================================================================
@@ -173,14 +225,22 @@ def parser_agent_tool(error_text: str) -> str:
 )
 def security_agent_tool(error_text: str) -> str:
     """Call Security Lambda via Gateway to scan for sensitive data."""
-    logger.info(f"🔒 Calling Security Lambda via Gateway ({len(error_text)} chars)")
+    update_component_status("security", "running", "Scanning for PII and secrets...")
     try:
         result = gateway_tools.scan_security(error_text)
-        logger.info(f"✅ Security Lambda returned: risk_level={result.get('risk_level', 'unknown')}")
-        return json.dumps(result)
+        risk_level = result.get('risk_level', 'unknown')
+        secrets = len(result.get('secrets_detected', []))
+        pii = len(result.get('pii_entities', []))
+        
+        if result.get('error'):
+            update_component_status("security", "error", error=result.get('error'))
+            return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        update_component_status("security", "success", f"Risk: {risk_level} | {secrets} secrets, {pii} PII")
+        return json.dumps({"success": True, **result})
     except Exception as e:
-        logger.error(f"❌ Security Lambda error: {str(e)}")
-        return json.dumps({"error": str(e), "risk_level": "unknown"})
+        update_component_status("security", "error", error=str(e))
+        return json.dumps({"success": False, "error": str(e), "risk_level": "unknown"})
 
 
 # ============================================================================
@@ -192,14 +252,20 @@ def security_agent_tool(error_text: str) -> str:
 )
 def context_agent_tool(error_message: str, error_type: str = "unknown", language: str = "unknown") -> str:
     """Call Context Lambda via Gateway to search external resources."""
-    logger.info(f"🔍 Calling Context Lambda via Gateway for {error_type} in {language}")
+    update_component_status("context", "running", f"Searching GitHub/StackOverflow for {error_type}...")
     try:
         result = gateway_tools.search_context(error_message, language)
-        logger.info(f"✅ Context Lambda returned: {result.get('total_results', 0)} results")
-        return json.dumps(result)
+        total_results = result.get('total_results', 0)
+        
+        if result.get('error'):
+            update_component_status("context", "error", error=result.get('error'))
+            return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        update_component_status("context", "success", f"Found {total_results} external resources")
+        return json.dumps({"success": True, **result})
     except Exception as e:
-        logger.error(f"❌ Context Lambda error: {str(e)}")
-        return json.dumps({"error": str(e), "github_issues": [], "stackoverflow_questions": []})
+        update_component_status("context", "error", error=str(e))
+        return json.dumps({"success": False, "error": str(e), "github_issues": [], "stackoverflow_questions": []})
 
 
 # ============================================================================
@@ -211,19 +277,19 @@ def context_agent_tool(error_message: str, error_type: str = "unknown", language
 )
 def read_github_file_tool(repo_url: str, file_path: str, branch: str = "main") -> str:
     """Read a file from GitHub to get source code context."""
-    logger.info(f"📄 Reading GitHub file: {repo_url}/{file_path}")
+    update_component_status("github_file", "running", f"Reading {file_path}...")
     try:
         from agents.context_agent import read_github_file
         result = read_github_file(repo_url, file_path, branch)
         # result is already a JSON string from the tool
         parsed = json.loads(result)
         if parsed.get("success"):
-            logger.info(f"✅ GitHub file read: {parsed.get('line_count', 0)} lines")
+            update_component_status("github_file", "success", f"Read {parsed.get('line_count', 0)} lines from {file_path}")
         else:
-            logger.warning(f"⚠️ GitHub file read failed: {parsed.get('error', 'unknown')}")
+            update_component_status("github_file", "error", error=parsed.get('error', 'File not found'))
         return result
     except Exception as e:
-        logger.error(f"❌ GitHub file read error: {str(e)}")
+        update_component_status("github_file", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e)})
 
 
@@ -236,15 +302,22 @@ def read_github_file_tool(repo_url: str, file_path: str, branch: str = "main") -
 )
 def rootcause_agent_tool(error_text: str, parsed_info: str = "{}") -> str:
     """Route root cause analysis to the RootCause Agent with pattern/LLM tools."""
-    logger.info(f"🎯 Invoking RootCauseAgent")
+    update_component_status("rootcause", "running", "Analyzing root cause with patterns + LLM...")
     try:
         parsed = json.loads(parsed_info) if isinstance(parsed_info, str) else parsed_info
         result = rootcause_agent.analyze(error_text, parsed)
-        logger.info(f"✅ RootCauseAgent returned: {result.get('confidence', 0)}% confidence")
-        return json.dumps(result)
+        confidence = result.get('confidence', 0)
+        source = result.get('source', 'unknown')
+        
+        if result.get('error'):
+            update_component_status("rootcause", "error", error=result.get('error'))
+            return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        update_component_status("rootcause", "success", f"{confidence}% confidence ({source})")
+        return json.dumps({"success": True, **result})
     except Exception as e:
-        logger.error(f"❌ RootCauseAgent error: {str(e)}")
-        return json.dumps({"error": str(e), "root_cause": "unknown", "confidence": 0})
+        update_component_status("rootcause", "error", error=str(e))
+        return json.dumps({"success": False, "error": str(e), "root_cause": "unknown", "confidence": 0})
 
 
 # ============================================================================
@@ -256,14 +329,20 @@ def rootcause_agent_tool(error_text: str, parsed_info: str = "{}") -> str:
 )
 def fix_agent_tool(error_text: str, root_cause: str, language: str = "javascript") -> str:
     """Route fix generation to the Fix Agent with Bedrock/AST tools."""
-    logger.info(f"🔧 Invoking FixAgent for {language}")
+    update_component_status("fix", "running", f"Generating fix for {language}...")
     try:
         result = fix_agent.generate(error_text, root_cause, language)
-        logger.info(f"✅ FixAgent returned: {result.get('fix_type', 'unknown')}")
-        return json.dumps(result)
+        fix_type = result.get('fix_type', 'unknown')
+        
+        if result.get('error'):
+            update_component_status("fix", "error", error=result.get('error'))
+            return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        update_component_status("fix", "success", f"Generated {fix_type} fix")
+        return json.dumps({"success": True, **result})
     except Exception as e:
-        logger.error(f"❌ FixAgent error: {str(e)}")
-        return json.dumps({"error": str(e), "fix_type": "unknown"})
+        update_component_status("fix", "error", error=str(e))
+        return json.dumps({"success": False, "error": str(e), "fix_type": "unknown"})
 
 
 # ============================================================================
@@ -275,14 +354,20 @@ def fix_agent_tool(error_text: str, root_cause: str, language: str = "javascript
 )
 def search_memory(error_text: str, limit: int = 5) -> str:
     """Search AgentCore memory for similar errors."""
-    logger.info(f"🔎 Searching memory for similar errors")
+    update_component_status("memory", "running", "Searching for similar past errors...")
     try:
         result = memory_agent.search(error_text, limit)
-        logger.info(f"✅ Memory search returned: {result.get('count', 0)} matches")
-        return json.dumps(result)
+        count = result.get('count', 0)
+        
+        if result.get('error'):
+            update_component_status("memory", "error", error=result.get('error'))
+            return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        update_component_status("memory", "success", f"Found {count} similar errors in memory")
+        return json.dumps({"success": True, **result})
     except Exception as e:
-        logger.error(f"❌ Memory search error: {str(e)}")
-        return json.dumps({"error": str(e), "results": []})
+        update_component_status("memory", "error", error=str(e))
+        return json.dumps({"success": False, "error": str(e), "results": []})
 
 
 @tool(
@@ -325,13 +410,19 @@ def store_session(context_type: str, content: str) -> str:
 )
 def record_stats(error_type: str, language: str, resolved: bool = False) -> str:
     """Call Stats Lambda via Gateway to record an error occurrence."""
-    logger.info(f"📊 Calling Stats Lambda to record: {error_type}")
+    update_component_status("stats", "running", f"Recording {error_type} stats...")
     try:
         result = gateway_tools.record_error(error_type, language, resolved)
-        return json.dumps(result)
+        
+        if result.get('error'):
+            update_component_status("stats", "error", error=result.get('error'))
+            return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        update_component_status("stats", "success", f"Recorded {error_type} occurrence")
+        return json.dumps({"success": True, **result})
     except Exception as e:
-        logger.error(f"❌ Stats Lambda error: {str(e)}")
-        return json.dumps({"error": str(e)})
+        update_component_status("stats", "error", error=str(e))
+        return json.dumps({"success": False, "error": str(e)})
 
 
 @tool(

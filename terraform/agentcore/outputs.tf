@@ -35,3 +35,36 @@ output "gateway_endpoint" {
   value       = aws_bedrockagentcore_gateway.main.gateway_url
 }
 
+# Log groups for frontend monitoring
+output "log_groups" {
+  description = "CloudWatch log group names for all components"
+  value = {
+    runtime  = aws_cloudwatch_log_group.agentcore.name
+    gateway  = aws_cloudwatch_log_group.gateway.name
+    parser   = aws_cloudwatch_log_group.parser.name
+    security = aws_cloudwatch_log_group.security.name
+    context  = aws_cloudwatch_log_group.context.name
+    stats    = aws_cloudwatch_log_group.stats.name
+  }
+}
+
+# Frontend configuration (to be injected into index.html)
+output "frontend_config" {
+  description = "Configuration to inject into the frontend"
+  value = {
+    apiEndpoint     = aws_bedrockagentcore_gateway.main.gateway_url
+    logsApiEndpoint = aws_apigatewayv2_api.logs.api_endpoint
+    region          = local.region
+    demoMode        = false
+    part            = var.feature_part
+    logGroups = {
+      runtime  = aws_cloudwatch_log_group.agentcore.name
+      gateway  = aws_cloudwatch_log_group.gateway.name
+      parser   = aws_cloudwatch_log_group.parser.name
+      security = aws_cloudwatch_log_group.security.name
+      context  = aws_cloudwatch_log_group.context.name
+      stats    = aws_cloudwatch_log_group.stats.name
+    }
+  }
+}
+

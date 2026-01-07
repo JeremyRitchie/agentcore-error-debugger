@@ -163,6 +163,12 @@ resource "aws_bedrockagentcore_agent_runtime" "main" {
     network_mode = "PUBLIC"
   }
 
+  # Logging configuration - stream to CloudWatch
+  logging_configuration {
+    log_group_name = aws_cloudwatch_log_group.agentcore.name
+    log_level      = "INFO"
+  }
+
   # Environment variables for the Strands agents
   environment_variables = {
     AWS_REGION         = local.region
@@ -171,11 +177,13 @@ resource "aws_bedrockagentcore_agent_runtime" "main" {
     GATEWAY_ID         = aws_bedrockagentcore_gateway.main.gateway_id
     LLM_MODEL_ID       = var.llm_model_id
     ENVIRONMENT        = var.environment
-    LOG_LEVEL          = "INFO"
+    LOG_LEVEL          = "DEBUG"
     # Blog Series Feature Flag
     FEATURE_PART       = tostring(var.feature_part)
     # Demo mode: false in production (uses real APIs)
     DEMO_MODE          = "false"
+    # CloudWatch log group for streaming
+    LOG_GROUP_NAME     = aws_cloudwatch_log_group.agentcore.name
   }
 
   tags = {

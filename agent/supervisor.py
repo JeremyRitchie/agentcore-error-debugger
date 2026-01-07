@@ -1008,6 +1008,11 @@ async def error_debugger(payload, context):
     Main entrypoint for the error debugger supervisor agent.
     Invoked by AgentCore runtime for each request.
     """
+    import traceback
+    
+    # Always yield something at the start to ensure we return data
+    yield "🔍 Starting error analysis...\n"
+    
     user_input = payload.get("prompt", "")
     session_id = payload.get("session_id", "unknown")
     mode = payload.get("mode", "comprehensive")  # comprehensive, quick
@@ -1016,7 +1021,12 @@ async def error_debugger(payload, context):
     session_filter.set_session_id(session_id)
     
     logger.info(f"🚀 Error Debugger started (mode: {mode})")
-    logger.info(f"📥 Input: {user_input[:100]}...")
+    logger.info(f"📥 Input length: {len(user_input)}")
+    logger.info(f"📥 Input preview: {user_input[:200]}...")
+    
+    if not user_input:
+        yield "❌ Error: No error text provided in 'prompt' field\n"
+        return
     
     # Bypass tool consent for automation
     os.environ["BYPASS_TOOL_CONSENT"] = "true"
@@ -1040,15 +1050,48 @@ Follow the full analysis workflow with all agents.
 Search memory first, then parse, scan, research, analyze, and generate fix.
 """
         
+        yield f"📋 Mode: {mode}\n"
+        yield f"🤖 Invoking supervisor agent...\n"
+        
+        # Check if supervisor is initialized
+        if supervisor is None:
+            yield "❌ Error: Supervisor agent not initialized\n"
+            return
+        
+        logger.info("Starting supervisor.stream_async...")
+        event_count = 0
+        
         # Stream responses from supervisor agent
         async for event in supervisor.stream_async(prompt):
-            if "data" in event:
-                yield event["data"]
+            event_count += 1
+            logger.info(f"Event {event_count}: keys={list(event.keys()) if isinstance(event, dict) else type(event)}")
+            
+            if isinstance(event, dict):
+                if "data" in event:
+                    yield event["data"]
+                elif "text" in event:
+                    yield event["text"]
+                elif "content" in event:
+                    yield str(event["content"])
+                else:
+                    # Yield the whole event as string for debugging
+                    yield f"[Event: {json.dumps(event, default=str)[:200]}]\n"
+            elif isinstance(event, str):
+                yield event
+            else:
+                yield str(event)
+        
+        if event_count == 0:
+            yield "⚠️ Warning: Supervisor produced no events\n"
+        else:
+            yield f"\n✅ Analysis complete ({event_count} events processed)\n"
                 
     except Exception as e:
         error_message = f"❌ Error during analysis: {str(e)}"
         logger.error(error_message)
-        yield error_message
+        logger.error(traceback.format_exc())
+        yield error_message + "\n"
+        yield f"Stack trace:\n{traceback.format_exc()}\n"
 
 
 # ============================================================================

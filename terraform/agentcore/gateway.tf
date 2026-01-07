@@ -225,6 +225,8 @@ resource "aws_bedrockagentcore_gateway_target" "context" {
             description = "Search GitHub Issues and Stack Overflow for similar errors and solutions"
 
             input_schema {
+              type = "object"
+
               property {
                 name        = "error_text"
                 type        = "string"
@@ -240,6 +242,8 @@ resource "aws_bedrockagentcore_gateway_target" "context" {
             }
 
             output_schema {
+              type = "object"
+
               property {
                 name = "query"
                 type = "string"
@@ -298,6 +302,8 @@ resource "aws_bedrockagentcore_gateway_target" "stats" {
             description = "Record error occurrences and query frequency/trends"
 
             input_schema {
+              type = "object"
+
               property {
                 name        = "action"
                 type        = "string"
@@ -331,6 +337,8 @@ resource "aws_bedrockagentcore_gateway_target" "stats" {
             }
 
             output_schema {
+              type = "object"
+
               property {
                 name = "success"
                 type = "boolean"

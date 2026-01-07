@@ -330,11 +330,15 @@ def handler(event, context):
                         'eventCount': event_count,
                         'agentActivity': agent_activity,
                         'agents': agent_results,  # Data from each agent
+                        'summary': agent_results.get('summary', {}),  # Also at top level for easy access
                     }
                     
                     if final_result and isinstance(final_result, dict):
                         response_data['result'] = final_result.get('result', str(final_result))
                         response_data['fullResponse'] = final_result
+                        # Ensure summary is at top level
+                        if 'summary' in final_result:
+                            response_data['summary'] = final_result['summary']
                     elif final_message and isinstance(final_message, dict):
                         msg = final_message.get('message')
                         if isinstance(msg, dict):

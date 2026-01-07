@@ -153,8 +153,9 @@ session_context = {
         "best_match_similarity": 0,
     },
     
-    # From Context
-    "external": {
+    # From Context (GitHub/StackOverflow search results)
+    # NOTE: Key is "context" to match what context_agent_tool stores
+    "context": {
         "github_issues": [],
         "stackoverflow_questions": [],
         "stackoverflow_answers": [],
@@ -180,6 +181,14 @@ session_context = {
         "prevention": [],
     },
     
+    # From Stats
+    # NOTE: Key is "stats" to match what record_stats tool stores
+    "stats": {
+        "error_type": "",
+        "occurrence_count": 0,
+        "trend": "stable",
+    },
+    
     # Reasoning trace
     "reasoning": [],
 }
@@ -192,11 +201,13 @@ def reset_session_context():
         "parsed": {"language": "unknown", "language_confidence": 0, "core_message": "", "stack_frames": [], "file_paths": [], "raw_error": ""},
         "security": {"risk_level": "unknown", "safe_to_store": True, "pii_found": [], "secrets_found": []},
         "memory": {"matches": [], "has_solution": False, "best_match_similarity": 0},
-        "external": {"github_issues": [], "stackoverflow_questions": [], "stackoverflow_answers": [], "code_examples": [], "top_solutions": [], "common_causes": []},
+        "context": {"github_issues": [], "stackoverflow_questions": [], "stackoverflow_answers": [], "code_examples": [], "top_solutions": [], "common_causes": []},
         "analysis": {"root_cause": "", "explanation": "", "confidence": 0, "category": "", "contributing_factors": []},
         "fix": {"fixed_code": "", "fix_type": "", "explanation": "", "prevention": []},
+        "stats": {"error_type": "", "occurrence_count": 0, "trend": "stable"},
         "reasoning": [],
     }
+    logger.info("🔄 Session context reset with keys: " + ", ".join(session_context.keys()))
 
 def update_session_context(section: str, data: dict):
     """Update a section of the session context."""

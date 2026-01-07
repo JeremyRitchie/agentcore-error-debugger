@@ -449,27 +449,62 @@ fix_agent = Agent(
 # INTERFACE - For supervisor to call
 # =============================================================================
 
-def generate(error_text: str, root_cause: str, language: str = "javascript") -> Dict[str, Any]:
+def generate(
+    error_text: str, 
+    root_cause: str, 
+    language: str = "javascript",
+    context: Dict[str, Any] = None
+) -> Dict[str, Any]:
     """
-    Generate a fix for an error.
+    Generate a fix for an error with full context.
     
     Args:
         error_text: The error message
         root_cause: Root cause analysis
         language: Programming language
+        context: Additional context including:
+            - stack_frames: List of {file, line, function}
+            - external_solutions: Solutions from GitHub/SO
         
     Returns:
         Dict with fix and supporting materials
     """
     logger.info(f"🔨 FixAgent: Generating fix for {language}")
     
+    # Build context section for the prompt
+    context_section = ""
+    if context:
+        stack_frames = context.get("stack_frames", [])
+        external = context.get("external_solutions", {})
+        
+        if stack_frames:
+            frames_str = "\n".join([
+                f"  - {f.get('file', 'unknown')}:{f.get('line', '?')} in {f.get('function', 'unknown')}"
+                for f in stack_frames[:5]
+            ])
+            context_section += f"\nStack Trace:\n{frames_str}\n"
+        
+        if external:
+            if external.get("stackoverflow_answers"):
+                answers = external.get("stackoverflow_answers", [])[:2]
+                for ans in answers:
+                    if ans.get("code_snippets"):
+                        context_section += f"\nSolution from StackOverflow (score: {ans.get('score', 0)}):\n"
+                        context_section += f"```\n{ans['code_snippets'][0][:500]}\n```\n"
+            
+            if external.get("summary", {}).get("recommended_approach"):
+                context_section += f"\nRecommended approach from research:\n{external['summary']['recommended_approach']}\n"
+    
     try:
         prompt = f"""Generate a fix for this error:
 
 Error: {error_text}
-Root Cause: {root_cause}
-Language: {language}
 
+Root Cause: {root_cause}
+
+Language: {language}
+{context_section}
+Use the context above to generate a specific, targeted fix.
 Generate the fix, validate it, suggest prevention, and create a test."""
         
         result = fix_agent(prompt)

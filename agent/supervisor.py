@@ -18,6 +18,7 @@ import os
 import sys
 import json
 import logging
+from datetime import datetime
 from strands import Agent, tool
 from strands.models import BedrockModel
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -118,10 +119,108 @@ component_status = {
     "stats": {"status": "idle", "message": None, "error": None},
 }
 
+# ============================================================================
+# Session Context Accumulator
+# ============================================================================
+# This accumulates context from all agents as they run.
+# The supervisor should pass this accumulated context to subsequent agents.
+session_context = {
+    # Original error
+    "original_error": "",
+    
+    # From Parser
+    "parsed": {
+        "language": "unknown",
+        "language_confidence": 0,
+        "error_type": "unknown",
+        "core_message": "",
+        "stack_frames": [],
+        "file_paths": [],
+    },
+    
+    # From Security
+    "security": {
+        "risk_level": "unknown",
+        "safe_to_store": True,
+        "pii_found": [],
+        "secrets_found": [],
+    },
+    
+    # From Memory
+    "memory": {
+        "matches": [],
+        "has_solution": False,
+        "best_match_similarity": 0,
+    },
+    
+    # From Context
+    "external": {
+        "github_issues": [],
+        "stackoverflow_questions": [],
+        "stackoverflow_answers": [],
+        "code_examples": [],
+        "top_solutions": [],
+        "common_causes": [],
+    },
+    
+    # From Root Cause
+    "analysis": {
+        "root_cause": "",
+        "explanation": "",
+        "confidence": 0,
+        "category": "",
+        "contributing_factors": [],
+    },
+    
+    # From Fix
+    "fix": {
+        "fixed_code": "",
+        "fix_type": "",
+        "explanation": "",
+        "prevention": [],
+    },
+    
+    # Reasoning trace
+    "reasoning": [],
+}
+
+def reset_session_context():
+    """Reset session context for new analysis."""
+    global session_context
+    session_context = {
+        "original_error": "",
+        "parsed": {"language": "unknown", "language_confidence": 0, "error_type": "unknown", "core_message": "", "stack_frames": [], "file_paths": []},
+        "security": {"risk_level": "unknown", "safe_to_store": True, "pii_found": [], "secrets_found": []},
+        "memory": {"matches": [], "has_solution": False, "best_match_similarity": 0},
+        "external": {"github_issues": [], "stackoverflow_questions": [], "stackoverflow_answers": [], "code_examples": [], "top_solutions": [], "common_causes": []},
+        "analysis": {"root_cause": "", "explanation": "", "confidence": 0, "category": "", "contributing_factors": []},
+        "fix": {"fixed_code": "", "fix_type": "", "explanation": "", "prevention": []},
+        "reasoning": [],
+    }
+
+def update_session_context(section: str, data: dict):
+    """Update a section of the session context."""
+    if section in session_context and isinstance(session_context[section], dict):
+        session_context[section].update(data)
+    logger.info(f"📝 Session context updated: {section}")
+
+def add_reasoning(step: str, thought: str):
+    """Add a reasoning step to the trace."""
+    session_context["reasoning"].append({
+        "step": step,
+        "thought": thought,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+def get_accumulated_context() -> str:
+    """Get the full accumulated context as JSON for passing to agents."""
+    return json.dumps(session_context, indent=2)
+
 def reset_component_status():
     """Reset all component status to idle."""
     for key in component_status:
         component_status[key] = {"status": "idle", "message": None, "error": None}
+    reset_session_context()
 
 def update_component_status(component: str, status: str, message: str = None, error: str = None):
     """Update a component's status and log it."""
@@ -178,6 +277,11 @@ def event_loop_tracker(**kwargs):
             # Stats Operations
             "record_stats": "📊 EXECUTING: Recording error statistics",
             "get_trend": "📈 EXECUTING: Analyzing error trends",
+            
+            # Context Accumulation
+            "update_context": "📝 CONTEXT: Updating accumulated session context",
+            "get_context": "📋 CONTEXT: Retrieving accumulated context",
+            "add_reasoning_step": "💭 THINKING: Recording reasoning step",
             
             # Reflection/Iteration
             "evaluate_progress": "🤔 REFLECTING: Evaluating progress and deciding next steps",
@@ -248,13 +352,21 @@ def security_agent_tool(error_text: str) -> str:
 # ============================================================================
 @tool(
     name="context_agent_tool",
-    description="Search external resources for error context: GitHub Issues, Stack Overflow. Calls Context Lambda via Gateway."
+    description="""Search external resources for error context: GitHub Issues, Stack Overflow.
+    
+    IMPORTANT: Pass the actual values from the parser for better search results:
+    - error_message: The core error message (not the full stack trace)
+    - error_type: The classified error type (null_reference, import_error, config_error, etc.)
+    - language: The detected programming language
+    
+    The more context you provide, the better the search results."""
 )
 def context_agent_tool(error_message: str, error_type: str = "unknown", language: str = "unknown") -> str:
     """Call Context Lambda via Gateway to search external resources."""
-    update_component_status("context", "running", f"Searching GitHub/StackOverflow for {error_type}...")
+    update_component_status("context", "running", f"Searching GitHub/StackOverflow for {language} {error_type}...")
     try:
-        result = gateway_tools.search_context(error_message, language)
+        # Pass all context to the search for better results
+        result = gateway_tools.search_context(error_message, language, error_type)
         total_results = result.get('total_results', 0)
         
         if result.get('error'):
@@ -349,13 +461,45 @@ def rootcause_agent_tool(
 # ============================================================================
 @tool(
     name="fix_agent_tool",
-    description="Generate code fixes using Bedrock Claude code generation. Validates syntax with AST parsers. Suggests prevention measures and creates test cases."
+    description="""Generate code fixes using Bedrock Claude code generation.
+    
+    IMPORTANT: Pass comprehensive context for better fixes:
+    - error_text: The full error message
+    - root_cause: The identified root cause (from rootcause_agent)
+    - language: The detected programming language (REQUIRED for correct syntax)
+    - stack_frames: JSON of stack frames (helps identify which file/line to fix)
+    - external_solutions: JSON of solutions found from GitHub/SO (optional but helpful)
+    
+    The more context, the more specific and accurate the fix."""
 )
-def fix_agent_tool(error_text: str, root_cause: str, language: str = "javascript") -> str:
-    """Route fix generation to the Fix Agent with Bedrock/AST tools."""
+def fix_agent_tool(
+    error_text: str, 
+    root_cause: str, 
+    language: str = "unknown",
+    stack_frames: str = "[]",
+    external_solutions: str = "{}"
+) -> str:
+    """Route fix generation to the Fix Agent with full context."""
     update_component_status("fix", "running", f"Generating fix for {language}...")
     try:
-        result = fix_agent.generate(error_text, root_cause, language)
+        # Parse additional context
+        frames = json.loads(stack_frames) if isinstance(stack_frames, str) else stack_frames
+        solutions = json.loads(external_solutions) if isinstance(external_solutions, str) else external_solutions
+        
+        # Build enhanced context for the fix agent
+        enhanced_context = {
+            "error_text": error_text,
+            "root_cause": root_cause,
+            "stack_frames": frames,
+            "external_solutions": solutions
+        }
+        
+        result = fix_agent.generate(
+            error_text=error_text,
+            root_cause=root_cause,
+            language=language,
+            context=enhanced_context
+        )
         fix_type = result.get('fix_type', 'unknown')
         
         if result.get('error'):
@@ -374,13 +518,25 @@ def fix_agent_tool(error_text: str, root_cause: str, language: str = "javascript
 # ============================================================================
 @tool(
     name="search_memory",
-    description="Search LONG-TERM memory for similar past errors. Uses AgentCore semantic search to find relevant debugging history and known solutions."
+    description="""Search LONG-TERM memory for similar past errors.
+    
+    Uses AgentCore semantic search to find relevant debugging history and known solutions.
+    
+    TIP: Include language and error_type in the search text for better results.
+    Example: "python import_error: No module named 'requests'" instead of just the error."""
 )
-def search_memory(error_text: str, limit: int = 5) -> str:
-    """Search AgentCore memory for similar errors."""
+def search_memory(error_text: str, limit: int = 5, language: str = "", error_type: str = "") -> str:
+    """Search AgentCore memory for similar errors with context."""
     update_component_status("memory", "running", "Searching for similar past errors...")
     try:
-        result = memory_agent.search(error_text, limit)
+        # Enhance search query with context for better semantic matching
+        search_query = error_text
+        if language and language != "unknown":
+            search_query = f"[{language}] {search_query}"
+        if error_type and error_type != "unknown":
+            search_query = f"{error_type}: {search_query}"
+        
+        result = memory_agent.search(search_query, limit)
         count = result.get('count', 0)
         
         if result.get('error'):
@@ -462,6 +618,66 @@ def get_trend(error_type: str = "", window_days: int = 7) -> str:
     except Exception as e:
         logger.error(f"❌ Stats Lambda error: {str(e)}")
         return json.dumps({"error": str(e)})
+
+
+# ============================================================================
+# CONTEXT ACCUMULATION TOOL
+# ============================================================================
+@tool(
+    name="update_context",
+    description="""Update the accumulated session context with new information.
+    
+    Call this after each agent returns to accumulate context.
+    The accumulated context is then available to subsequent agents.
+    
+    Sections: parsed, security, memory, external, analysis, fix
+    
+    Example: update_context(section="parsed", data='{"language": "python", "error_type": "import_error"}')"""
+)
+def update_context(section: str, data: str) -> str:
+    """Update accumulated session context."""
+    try:
+        parsed_data = json.loads(data) if isinstance(data, str) else data
+        update_session_context(section, parsed_data)
+        return json.dumps({
+            "success": True,
+            "section": section,
+            "message": f"Context updated for {section}"
+        })
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@tool(
+    name="get_context",
+    description="""Get the full accumulated context from all agents so far.
+    
+    Returns everything learned during this session:
+    - parsed: language, error_type, stack_frames
+    - security: risk level, PII/secrets found
+    - memory: similar past errors and solutions
+    - external: GitHub issues, SO answers, code examples
+    - analysis: root cause hypothesis
+    - fix: generated fix
+    
+    Use this to review what you know before deciding next steps."""
+)
+def get_context() -> str:
+    """Get full accumulated session context."""
+    return get_accumulated_context()
+
+
+@tool(
+    name="add_reasoning_step",
+    description="""Record a reasoning step in the session trace.
+    
+    Call this to document your thinking process.
+    Helps with debugging and understanding the analysis flow."""
+)
+def add_reasoning_step(step: str, thought: str) -> str:
+    """Add a reasoning step to the trace."""
+    add_reasoning(step, thought)
+    return json.dumps({"success": True, "step": step})
 
 
 # ============================================================================
@@ -764,7 +980,11 @@ def build_tools_list():
         security_agent_tool,
         rootcause_agent_tool,
         fix_agent_tool,
-        evaluate_progress,  # Reflection tool for iterative reasoning
+        # Context and reasoning tools (always available)
+        update_context,           # Accumulate context between agents
+        get_context,              # View accumulated context
+        add_reasoning_step,       # Document thinking
+        evaluate_progress,        # Reflection for iterative reasoning
     ]
     
     # Part 2: Advanced agents and features

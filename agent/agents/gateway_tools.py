@@ -377,15 +377,21 @@ class GatewayTools:
     # CONTEXT TOOL
     # =========================================================================
     @staticmethod
-    def search_context(error_text: str, language: str = "") -> Dict[str, Any]:
+    def search_context(error_text: str, language: str = "", error_type: str = "") -> Dict[str, Any]:
         """
         Search GitHub Issues and Stack Overflow for error context.
         
         Calls: Context Lambda via Gateway
+        
+        Args:
+            error_text: The error message to search for
+            language: Programming language for filtering results
+            error_type: Type of error (e.g., null_reference, import_error) for better search
         """
         return GatewayTools.call_tool("search_error_context", {
             "error_text": error_text,
-            "language": language
+            "language": language,
+            "error_type": error_type
         })
     
     @staticmethod

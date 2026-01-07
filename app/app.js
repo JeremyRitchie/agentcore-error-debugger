@@ -1390,6 +1390,40 @@ async function callAgentCoreBackend(errorText) {
                     rawData: data.agents.stats
                 };
             }
+            
+            // Use summary for comprehensive display
+            if (data.agents.summary) {
+                const summary = data.agents.summary;
+                result.summary = summary;
+                
+                // Override with summary data if available (more reliable)
+                if (summary.language && summary.language !== 'unknown') {
+                    result.parsed.language = summary.language;
+                    result.parsed.languageConfidence = summary.languageConfidence || 0;
+                }
+                if (summary.errorType && summary.errorType !== 'unknown') {
+                    result.parsed.errorType = summary.errorType;
+                }
+                if (summary.coreMessage) {
+                    result.parsed.coreMessage = summary.coreMessage;
+                }
+                if (summary.rootCause) {
+                    result.rootCause.rootCause = summary.rootCause;
+                    result.rootCause.confidence = summary.rootCauseConfidence || 0;
+                    result.rootCause.solution = summary.solution || '';
+                }
+                if (summary.fixAfter) {
+                    result.fix.fixType = summary.fixType || '';
+                    result.fix.before = summary.fixBefore || '';
+                    result.fix.after = summary.fixAfter || '';
+                    result.fix.explanation = summary.fixExplanation || '';
+                }
+                if (summary.riskLevel) {
+                    result.security.riskLevel = summary.riskLevel;
+                }
+                
+                console.log('📋 Summary applied:', summary);
+            }
         }
         
         // Also parse the final result text for any additional info

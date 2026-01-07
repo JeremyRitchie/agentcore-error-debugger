@@ -285,7 +285,7 @@ def handler(event, context):
                                     elif 'result' in parsed and 'toolResult' not in event_str:
                                         result_val = parsed.get('result')
                                         # Check if this is our structured agent results
-                                        if isinstance(result_val, dict) and any(k in result_val for k in ['parser', 'security', 'rootcause']):
+                                        if isinstance(result_val, dict) and any(k in result_val for k in ['parser', 'security', 'rootcause', 'summary']):
                                             # This is the final structured result from supervisor
                                             logger.info("Found structured agent results!")
                                             agent_results['parser'] = result_val.get('parser')
@@ -295,6 +295,10 @@ def handler(event, context):
                                             agent_results['fix'] = result_val.get('fix')
                                             agent_results['memory'] = result_val.get('memory')
                                             agent_results['stats'] = result_val.get('stats')
+                                            agent_results['summary'] = result_val.get('summary')
+                                        # Also check for summary at top level
+                                        if 'summary' in parsed:
+                                            agent_results['summary'] = parsed.get('summary')
                                         final_result = parsed
                                     
                                     # Capture final message

@@ -773,6 +773,109 @@ def evaluate_progress(
     return json.dumps(result, indent=2)
 
 
+def generate_final_summary(context: dict) -> dict:
+    """
+    Generate a comprehensive final summary from all collected agent data.
+    This provides a clear, actionable overview for the frontend.
+    """
+    parsed = context.get("parsed", {})
+    security = context.get("security", {})
+    analysis = context.get("analysis", {})
+    fix = context.get("fix", {})
+    ctx = context.get("context", {})
+    memory = context.get("memory", {})
+    
+    # Extract key information
+    language = parsed.get("language", "unknown")
+    language_confidence = parsed.get("confidence", parsed.get("language_confidence", 0))
+    error_type = parsed.get("error_type", "unknown")
+    core_message = parsed.get("core_message", parsed.get("error_message", ""))
+    
+    root_cause = analysis.get("root_cause", analysis.get("cause", ""))
+    cause_confidence = analysis.get("confidence", 0)
+    solution = analysis.get("solution", analysis.get("explanation", ""))
+    
+    fix_type = fix.get("fix_type", "")
+    fix_before = fix.get("before", "")
+    fix_after = fix.get("after", "")
+    fix_explanation = fix.get("explanation", "")
+    
+    risk_level = security.get("risk_level", "unknown")
+    
+    # Count external resources
+    github_count = len(ctx.get("github_issues", []))
+    so_count = len(ctx.get("stackoverflow_answers", []))
+    memory_count = len(memory.get("matches", memory.get("results", [])))
+    
+    # Build summary text
+    summary_parts = []
+    
+    # Language and error type
+    if language != "unknown":
+        summary_parts.append(f"**Language**: {language} ({language_confidence}% confidence)")
+    if error_type != "unknown":
+        summary_parts.append(f"**Error Type**: {error_type}")
+    
+    # Core message
+    if core_message:
+        summary_parts.append(f"**Error**: {core_message[:200]}")
+    
+    # Root cause
+    if root_cause:
+        summary_parts.append(f"\n**Root Cause** ({cause_confidence}% confidence): {root_cause}")
+    
+    # Solution
+    if solution:
+        summary_parts.append(f"\n**Solution**: {solution}")
+    
+    # Fix
+    if fix_after:
+        summary_parts.append(f"\n**Suggested Fix** ({fix_type}):")
+        if fix_before:
+            summary_parts.append(f"Before: `{fix_before[:100]}`")
+        summary_parts.append(f"After: `{fix_after[:100]}`")
+        if fix_explanation:
+            summary_parts.append(f"Explanation: {fix_explanation[:200]}")
+    
+    # Resources found
+    resources = []
+    if github_count > 0:
+        resources.append(f"{github_count} GitHub issues")
+    if so_count > 0:
+        resources.append(f"{so_count} Stack Overflow answers")
+    if memory_count > 0:
+        resources.append(f"{memory_count} similar past errors")
+    if resources:
+        summary_parts.append(f"\n**Resources Found**: {', '.join(resources)}")
+    
+    # Security
+    if risk_level != "unknown":
+        summary_parts.append(f"\n**Security Risk**: {risk_level}")
+    
+    summary_text = "\n".join(summary_parts) if summary_parts else "Analysis complete but no specific results captured."
+    
+    return {
+        "text": summary_text,
+        "language": language,
+        "languageConfidence": language_confidence,
+        "errorType": error_type,
+        "coreMessage": core_message,
+        "rootCause": root_cause,
+        "rootCauseConfidence": cause_confidence,
+        "solution": solution,
+        "fixType": fix_type,
+        "fixBefore": fix_before,
+        "fixAfter": fix_after,
+        "fixExplanation": fix_explanation,
+        "riskLevel": risk_level,
+        "resourceCounts": {
+            "github": github_count,
+            "stackoverflow": so_count,
+            "memory": memory_count
+        }
+    }
+
+
 # ============================================================================
 # Supervisor Agent System Prompt
 # ============================================================================
@@ -1099,6 +1202,9 @@ Follow the full analysis workflow with all agents.
         
         yield f"\n✅ Analysis complete ({event_count} events)\n"
         
+        # Generate a final summary from all collected data
+        summary = generate_final_summary(session_context)
+        
         # Yield structured results from session_context for frontend
         final_result = {
             "result": {
@@ -1109,7 +1215,9 @@ Follow the full analysis workflow with all agents.
                 "fix": session_context.get("fix", {}),
                 "memory": session_context.get("memory", {}),
                 "stats": session_context.get("stats", {}),
+                "summary": summary,
             },
+            "summary": summary,
             "eventCount": event_count,
             "sessionId": session_id
         }

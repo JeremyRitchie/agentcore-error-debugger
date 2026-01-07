@@ -9,10 +9,15 @@
 
 // ===== Configuration =====
 const CONFIG = {
-    apiEndpoint: window.AGENTCORE_CONFIG?.apiEndpoint || '/api',
+    // Cognito Identity Pool for direct AWS access
+    identityPoolId: window.AGENTCORE_CONFIG?.identityPoolId || null,
+    runtimeEndpointArn: window.AGENTCORE_CONFIG?.runtimeEndpointArn || null,
+    
+    // Logs API (still uses HTTP API Gateway for simplicity)
     logsApiEndpoint: window.AGENTCORE_CONFIG?.logsApiEndpoint || null,
+    
     sessionId: 'sess_' + Math.random().toString(36).substring(2, 10),
-    // Demo mode: true unless the AgentCore backend is available
+    // Demo mode: true unless Cognito is configured
     demoMode: window.AGENTCORE_CONFIG?.demoMode ?? true,
     githubRawUrl: 'https://raw.githubusercontent.com',
     githubApiUrl: 'https://api.github.com',
@@ -26,9 +31,23 @@ const CONFIG = {
         context:  '/aws/lambda/error-debugger-context',
         stats:    '/aws/lambda/error-debugger-stats',
     },
-    // AWS Region for CloudWatch
+    // AWS Region
     awsRegion: window.AGENTCORE_CONFIG?.region || 'us-east-1',
 };
+
+// AWS Client instance (initialized when needed)
+let awsClient = null;
+
+function getAWSClient() {
+    if (!awsClient && CONFIG.identityPoolId && CONFIG.runtimeEndpointArn) {
+        awsClient = new window.AWSClient({
+            region: CONFIG.awsRegion,
+            identityPoolId: CONFIG.identityPoolId,
+            runtimeEndpointArn: CONFIG.runtimeEndpointArn,
+        });
+    }
+    return awsClient;
+}
 
 // ===== Feature Flags (Blog Post Parts) =====
 // Part 1: Basic agents (Parser, Security, Root Cause, Fix, Supervisor)
@@ -1231,8 +1250,10 @@ async function runAnalysis() {
 // ===== Live Backend Call =====
 
 async function callAgentCoreBackend(errorText) {
-    if (!CONFIG.apiEndpoint || CONFIG.apiEndpoint === '/api') {
-        throw new Error('AgentCore API endpoint not configured. Set window.AGENTCORE_CONFIG.apiEndpoint');
+    const client = getAWSClient();
+    
+    if (!client) {
+        throw new Error('AWS not configured. Set identityPoolId and runtimeEndpointArn in config.');
     }
     
     state.startTime = Date.now();
@@ -1242,49 +1263,42 @@ async function callAgentCoreBackend(errorText) {
     // Activate supervisor
     activateNode('node-runtime');
     updateAgentStatus('supervisor', 'running');
-    addLogEntry('SUPERVISOR → Orchestrating analysis...', 'agent-start');
+    addLogEntry('SUPERVISOR → Getting AWS credentials...', 'agent-start');
+    
+    const githubRepo = document.getElementById('githubRepo')?.value?.trim() || '';
+    
+    // Initialize result structure
+    let result = {
+        parsed: { language: 'unknown', languageConfidence: 0, frameCount: 0, coreMessage: '' },
+        security: { riskLevel: 'low', secretsFound: 0, piiFound: 0, safeToStore: true, recommendations: [] },
+        memory: { count: 0, matches: [], hasSolution: false },
+        context: { githubCount: 0, stackoverflowCount: 0, allResources: [], explanation: '', searchUrls: {} },
+        rootCause: { rootCause: '', confidence: 0, solution: '' },
+        fix: { fixType: '', before: '', after: '', explanation: '' },
+        stats: { recorded: true, trend: 'stable' },
+    };
     
     try {
-        const response = await fetch(CONFIG.apiEndpoint, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                prompt: errorText,
-                session_id: CONFIG.sessionId,
-                mode: 'comprehensive',
-            }),
+        // Get credentials first
+        await client.getCredentials();
+        addLogEntry('✅ Got temporary AWS credentials', 'info');
+        
+        // Build input for AgentCore
+        const inputPayload = JSON.stringify({
+            action: 'analyze',
+            error_text: errorText,
+            github_repo: githubRepo,
+            session_id: CONFIG.sessionId,
         });
         
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`API error ${response.status}: ${errorText}`);
-        }
+        addLogEntry('🚀 Calling AgentCore Runtime directly...', 'agent-start');
         
-        // Handle streaming response
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        
-        let fullResponse = '';
-        let result = {
-            parsed: { language: 'unknown', languageConfidence: 0, frameCount: 0, coreMessage: '' },
-            security: { riskLevel: 'low', secretsFound: 0, piiFound: 0, safeToStore: true, recommendations: [] },
-            memory: { count: 0, matches: [], hasSolution: false },
-            context: { githubCount: 0, stackoverflowCount: 0, allResources: [], explanation: '', searchUrls: {} },
-            rootCause: { rootCause: '', confidence: 0, solution: '' },
-            fix: { fixType: '', before: '', after: '', explanation: '' },
-            stats: { recorded: true, trend: 'stable' },
-        };
-        
-        if (reader) {
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                
-                const chunk = decoder.decode(value, { stream: true });
-                fullResponse += chunk;
-                
+        // Call AgentCore with streaming
+        const fullResponse = await client.invokeAgentCoreStreaming(
+            inputPayload,
+            CONFIG.sessionId,
+            (chunk, fullText) => {
+                // Handle streaming chunks
                 // Parse status updates from the stream
                 const statusMatches = chunk.matchAll(/\[\[STATUS:(.*?)\]\]/g);
                 for (const match of statusMatches) {
@@ -1296,13 +1310,10 @@ async function callAgentCoreBackend(errorText) {
                     }
                 }
                 
-                // Update results panel with streaming content
-                updateStreamingResults(fullResponse);
+                // Update UI with streaming content
+                updateStreamingResults(fullText);
             }
-        } else {
-            // Non-streaming response
-            fullResponse = await response.text();
-        }
+        );
         
         // Parse the final response
         result = parseAgentResponse(fullResponse, result);
@@ -1310,12 +1321,15 @@ async function callAgentCoreBackend(errorText) {
         // Mark supervisor complete
         updateAgentStatus('supervisor', 'complete');
         deactivateNode('node-runtime');
+        addLogEntry('✅ Analysis complete!', 'agent-complete');
         
         return result;
         
     } catch (error) {
+        console.error('AgentCore error:', error);
         updateAgentStatus('supervisor', 'error');
         deactivateNode('node-runtime');
+        addLogEntry(`❌ Error: ${error.message}`, 'error');
         throw error;
     }
 }

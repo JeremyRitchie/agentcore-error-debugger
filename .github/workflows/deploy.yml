@@ -124,7 +124,7 @@ jobs:
           echo "s3_bucket=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
           echo "cloudfront_id=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_OUTPUT
           echo "runtime_id=$(terraform output -raw runtime_id)" >> $GITHUB_OUTPUT
-          echo "gateway_url=$(terraform output -raw gateway_endpoint)" >> $GITHUB_OUTPUT
+          echo "cognito_pool_id=$(terraform output -raw cognito_identity_pool_id)" >> $GITHUB_OUTPUT
           echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
           
           # Get full frontend config as JSON
@@ -184,7 +184,7 @@ jobs:
           echo "| Resource | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Runtime | \`${{ steps.tf-outputs.outputs.runtime_id }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Gateway | \`${{ steps.tf-outputs.outputs.gateway_url }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cognito Pool | \`${{ steps.tf-outputs.outputs.cognito_pool_id }}\` |" >> $GITHUB_STEP_SUMMARY
           if [ "${{ env.FEATURE_PART }}" == "2" ]; then
             echo "| Memory | \`${{ steps.tf-outputs.outputs.memory_id }}\` |" >> $GITHUB_STEP_SUMMARY
           fi

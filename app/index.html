@@ -374,7 +374,11 @@ TypeError: Cannot read properties of undefined (reading 'map')
         if (!window.AGENTCORE_CONFIG) {
             console.log('🎮 No config.js found - running in DEMO mode');
             window.AGENTCORE_CONFIG = {
-                apiEndpoint: null,
+                // Cognito Identity Pool for AWS credentials (set by Terraform)
+                identityPoolId: null,
+                runtimeEndpointArn: null,
+                
+                // Other config
                 logsApiEndpoint: null,
                 demoMode: true,
                 region: 'us-east-1',
@@ -393,6 +397,8 @@ TypeError: Cannot read properties of undefined (reading 'map')
             console.log('🚀 Loaded config.js - demoMode:', window.AGENTCORE_CONFIG.demoMode);
         }
     </script>
+    <!-- AWS client for Cognito + AgentCore -->
+    <script src="aws-client.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

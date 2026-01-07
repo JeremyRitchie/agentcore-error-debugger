@@ -53,11 +53,23 @@ output "log_groups" {
 output "frontend_config" {
   description = "Configuration to inject into the frontend"
   value = {
-    apiEndpoint     = aws_bedrockagentcore_gateway.main.gateway_url
-    logsApiEndpoint = aws_apigatewayv2_api.logs.api_endpoint
+    # Cognito for browser AWS credentials
+    identityPoolId  = aws_cognito_identity_pool.main.id
     region          = local.region
-    demoMode        = false
-    part            = var.feature_part
+    
+    # AgentCore endpoints
+    runtimeEndpointArn = aws_bedrockagentcore_agent_runtime_endpoint.main.agent_runtime_endpoint_arn
+    runtimeId          = aws_bedrockagentcore_agent_runtime.main.agent_runtime_id
+    memoryId           = var.feature_part >= 2 ? aws_bedrockagentcore_memory.main[0].id : null
+    
+    # Logs API (still uses HTTP API Gateway)
+    logsApiEndpoint = aws_apigatewayv2_api.logs.api_endpoint
+    
+    # Mode
+    demoMode = false
+    part     = var.feature_part
+    
+    # Log groups for frontend logs viewer
     logGroups = {
       runtime  = aws_cloudwatch_log_group.agentcore.name
       gateway  = aws_cloudwatch_log_group.gateway.name

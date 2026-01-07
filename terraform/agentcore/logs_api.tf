@@ -60,6 +60,8 @@ resource "aws_lambda_function" "logs" {
       ENVIRONMENT        = var.environment
       LOG_LEVEL          = "INFO"
       RUNTIME_LOG_GROUP  = aws_cloudwatch_log_group.agentcore.name
+      GATEWAY_LOG_GROUP  = aws_cloudwatch_log_group.gateway.name
+      MEMORY_LOG_GROUP   = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : ""
       PARSER_LOG_GROUP   = aws_cloudwatch_log_group.parser.name
       SECURITY_LOG_GROUP = aws_cloudwatch_log_group.security.name
       CONTEXT_LOG_GROUP  = aws_cloudwatch_log_group.context.name
@@ -86,6 +88,8 @@ logs_client = boto3.client('logs')
 # Log group configuration from environment
 LOG_GROUPS = {
     'runtime': os.environ.get('RUNTIME_LOG_GROUP', ''),
+    'gateway': os.environ.get('GATEWAY_LOG_GROUP', ''),
+    'memory': os.environ.get('MEMORY_LOG_GROUP', ''),
     'parser': os.environ.get('PARSER_LOG_GROUP', ''),
     'security': os.environ.get('SECURITY_LOG_GROUP', ''),
     'context': os.environ.get('CONTEXT_LOG_GROUP', ''),

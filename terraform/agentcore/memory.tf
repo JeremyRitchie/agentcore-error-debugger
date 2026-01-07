@@ -3,9 +3,21 @@
 # Stores error patterns and session context for learning
 # Part 2 Feature - only created when feature_part >= 2
 
+# CloudWatch Log Group for Memory (for manual logging configuration in AWS Console)
+resource "aws_cloudwatch_log_group" "memory" {
+  count             = var.feature_part >= 2 ? 1 : 0
+  name              = "/aws/bedrock-agentcore/${local.resource_prefix}-memory"
+  retention_in_days = 14
+
+  tags = {
+    Name = "${local.resource_prefix}-memory-logs"
+  }
+}
+
 # AgentCore Memory
 # Note: name must match ^[a-zA-Z][a-zA-Z0-9_]{0,47}$ - no hyphens allowed
 # event_expiry_duration is in days (7-365), not seconds
+# Note: Logging must be configured manually in AWS Console pointing to the log group above
 resource "aws_bedrockagentcore_memory" "main" {
   count = var.feature_part >= 2 ? 1 : 0
   
@@ -13,7 +25,7 @@ resource "aws_bedrockagentcore_memory" "main" {
 
   event_expiry_duration = 30 # days - keeps error patterns for a month
 
-  depends_on = [aws_kms_key.agentcore]
+  depends_on = [aws_kms_key.agentcore, aws_cloudwatch_log_group.memory]
 }
 
 # KMS Key for Memory encryption (Part 2 only)

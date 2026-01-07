@@ -125,26 +125,25 @@ jobs:
           echo "cloudfront_id=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_OUTPUT
           echo "runtime_id=$(terraform output -raw runtime_id)" >> $GITHUB_OUTPUT
           echo "gateway_url=$(terraform output -raw gateway_endpoint)" >> $GITHUB_OUTPUT
-          # Memory is only created in Part 2
-          MEMORY_ID=$(terraform output -raw memory_id 2>/dev/null || echo "")
-          echo "memory_id=${MEMORY_ID}" >> $GITHUB_OUTPUT
           echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
+          
+          # Get full frontend config as JSON
+          FRONTEND_CONFIG=$(terraform output -json frontend_config)
+          echo "frontend_config<<EOFCONFIG" >> $GITHUB_OUTPUT
+          echo "$FRONTEND_CONFIG" >> $GITHUB_OUTPUT
+          echo "EOFCONFIG" >> $GITHUB_OUTPUT
       
       # ===== Deploy Frontend =====
       - name: Deploy Frontend
         run: |
-          # Create runtime config with feature flags
-          cat > app/config.js << EOF
-          window.AGENTCORE_CONFIG = {
-            gatewayUrl: '${{ steps.tf-outputs.outputs.gateway_url }}',
-            runtimeId: '${{ steps.tf-outputs.outputs.runtime_id }}',
-            memoryId: '${{ steps.tf-outputs.outputs.memory_id }}',
-            demoMode: false,
-            // Blog Series Feature Flag
-            part: ${{ env.FEATURE_PART }},
-          };
-          EOF
+          # Create runtime config from Terraform frontend_config output
+          cat > app/config.js << 'EOFJS'
+          window.AGENTCORE_CONFIG = ${{ steps.tf-outputs.outputs.frontend_config }};
+          EOFJS
           
+          echo "📦 Generated config.js:"
+          cat app/config.js
+          echo ""
           echo "🎯 Deploying Part ${{ env.FEATURE_PART }} features"
           
           # Sync static assets with long cache

@@ -19,6 +19,8 @@ const CONFIG = {
     // CloudWatch log groups (set by Terraform output)
     logGroups: window.AGENTCORE_CONFIG?.logGroups || {
         runtime:  '/aws/bedrock-agentcore/error-debugger',
+        gateway:  '/aws/bedrock-agentcore/error-debugger-gateway',
+        memory:   '/aws/bedrock-agentcore/error-debugger-memory',
         parser:   '/aws/lambda/error-debugger-parser',
         security: '/aws/lambda/error-debugger-security',
         context:  '/aws/lambda/error-debugger-context',
@@ -1748,7 +1750,7 @@ const LogsManager = {
         const now = Date.now();
         const logs = [];
         
-        const components = ['runtime', 'parser', 'security', 'context', 'stats'];
+        const components = ['runtime', 'gateway', 'memory', 'parser', 'security', 'context', 'stats'];
         const levels = ['INFO', 'INFO', 'INFO', 'WARN', 'ERROR'];
         
         // If we've run an analysis, generate logs for that
@@ -1780,6 +1782,8 @@ const LogsManager = {
             
             const messages = {
                 runtime: ['Heartbeat check', 'Memory usage: 245MB', 'Active sessions: 1', 'Tool execution complete'],
+                gateway: ['MCP request received', 'Routing to Lambda', 'Tool invocation complete', 'Response streaming'],
+                memory: ['Semantic search initiated', 'Found 3 matching patterns', 'Context stored', 'Session updated'],
                 parser: ['Regex pattern matched', 'Stack frame extracted', 'Language detected', 'Classification complete'],
                 security: ['PII scan started', 'No secrets found', 'Risk level: low', 'Scan complete'],
                 context: ['GitHub API call', 'StackOverflow search', 'Results cached', 'Context retrieved'],

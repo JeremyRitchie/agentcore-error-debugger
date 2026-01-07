@@ -59,8 +59,18 @@ resource "aws_iam_role_policy_attachment" "agentcore_gateway" {
   policy_arn = aws_iam_policy.agentcore_gateway.arn
 }
 
+# CloudWatch Log Group for Gateway (for manual logging configuration in AWS Console)
+resource "aws_cloudwatch_log_group" "gateway" {
+  name              = "/aws/bedrock-agentcore/${local.resource_prefix}-gateway"
+  retention_in_days = 14
+
+  tags = {
+    Name = "${local.resource_prefix}-gateway-logs"
+  }
+}
+
 # AgentCore Gateway
-# Note: Gateway logging is handled via CloudWatch Logs Insights on the associated Lambda logs
+# Note: Logging must be configured manually in AWS Console pointing to the log group above
 resource "aws_bedrockagentcore_gateway" "main" {
   name            = "${local.resource_prefix}-gateway"
   description     = "Error Debugger - MCP Gateway"

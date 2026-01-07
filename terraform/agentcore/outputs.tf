@@ -36,11 +36,12 @@ output "gateway_endpoint" {
 }
 
 # Log groups for frontend monitoring
-# Note: Gateway doesn't have native logging, logs are in the Lambda functions it invokes
 output "log_groups" {
   description = "CloudWatch log group names for all components"
   value = {
     runtime  = aws_cloudwatch_log_group.agentcore.name
+    gateway  = aws_cloudwatch_log_group.gateway.name
+    memory   = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : null
     parser   = aws_cloudwatch_log_group.parser.name
     security = aws_cloudwatch_log_group.security.name
     context  = aws_cloudwatch_log_group.context.name
@@ -59,6 +60,8 @@ output "frontend_config" {
     part            = var.feature_part
     logGroups = {
       runtime  = aws_cloudwatch_log_group.agentcore.name
+      gateway  = aws_cloudwatch_log_group.gateway.name
+      memory   = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : null
       parser   = aws_cloudwatch_log_group.parser.name
       security = aws_cloudwatch_log_group.security.name
       context  = aws_cloudwatch_log_group.context.name

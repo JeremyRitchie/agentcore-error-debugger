@@ -1474,11 +1474,11 @@ function handleStatusUpdate(status) {
     if (state === 'running') {
         updateAgentStatus(agent, 'running');
         addLogEntry(`${component.toUpperCase()} → ${message || 'Processing...'}`, 'agent-start');
-        window.state?.agentsUsed++;
+        if (window.state) window.state.agentsUsed++;
     } else if (state === 'success') {
         updateAgentStatus(agent, 'complete');
         addLogEntry(`${component.toUpperCase()} ✓ ${message || 'Complete'}`, 'agent-complete');
-        window.state?.toolsUsed++;
+        if (window.state) window.state.toolsUsed++;
     } else if (state === 'error') {
         updateAgentStatus(agent, 'error');
         addLogEntry(`${component.toUpperCase()} ❌ ${error || 'Failed'}`, 'error');

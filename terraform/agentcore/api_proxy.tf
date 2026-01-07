@@ -354,8 +354,8 @@ resource "aws_lambda_function_url" "api_proxy" {
 
   cors {
     allow_origins     = ["*"]
-    allow_methods     = ["POST", "OPTIONS"]
-    allow_headers     = ["Content-Type", "Authorization"]
+    allow_methods     = ["POST"]
+    allow_headers     = ["content-type", "authorization"]
     allow_credentials = false
     max_age           = 300
   }

@@ -53,16 +53,11 @@ output "log_groups" {
 output "frontend_config" {
   description = "Configuration to inject into the frontend"
   value = {
-    # Cognito for browser AWS credentials
-    identityPoolId  = aws_cognito_identity_pool.main.id
-    region          = local.region
+    # API endpoint (Lambda proxy with CORS)
+    apiEndpoint = aws_apigatewayv2_api.api_proxy.api_endpoint
+    region      = local.region
     
-    # AgentCore endpoints
-    runtimeEndpointArn = aws_bedrockagentcore_agent_runtime_endpoint.main.agent_runtime_endpoint_arn
-    runtimeId          = aws_bedrockagentcore_agent_runtime.main.agent_runtime_id
-    memoryId           = var.feature_part >= 2 ? aws_bedrockagentcore_memory.main[0].id : null
-    
-    # Logs API (still uses HTTP API Gateway)
+    # Logs API
     logsApiEndpoint = aws_apigatewayv2_api.logs.api_endpoint
     
     # Mode

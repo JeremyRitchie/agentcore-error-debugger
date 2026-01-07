@@ -74,7 +74,7 @@ resource "aws_cloudwatch_log_group" "gateway" {
 # AgentCore Gateway
 # Note: Logging must be configured manually in AWS Console pointing to the log group above
 # Note: Using NONE authorizer for internal Runtime->Gateway calls
-#       The Runtime already authenticates callers via Cognito/IAM at the endpoint level
+#       The Runtime already authenticates callers via Lambda proxy at the API Gateway level
 resource "aws_bedrockagentcore_gateway" "main" {
   name            = "${local.resource_prefix}-gateway"
   description     = "Error Debugger - MCP Gateway"

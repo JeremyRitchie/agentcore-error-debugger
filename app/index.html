@@ -374,15 +374,16 @@ TypeError: Cannot read properties of undefined (reading 'map')
         if (!window.AGENTCORE_CONFIG) {
             console.log('🎮 No config.js found - running in DEMO mode');
             window.AGENTCORE_CONFIG = {
-                // Cognito Identity Pool for AWS credentials (set by Terraform)
-                identityPoolId: null,
-                runtimeEndpointArn: null,
-                
-                // Other config
+                // API endpoint (Lambda proxy - handles CORS)
+                apiEndpoint: null,
                 logsApiEndpoint: null,
+                
+                // Mode
                 demoMode: true,
                 region: 'us-east-1',
                 part: 2,
+                
+                // Log groups
                 logGroups: {
                     runtime: '/aws/bedrock-agentcore/error-debugger-prod',
                     gateway: '/aws/bedrock-agentcore/error-debugger-prod-gateway',
@@ -397,8 +398,6 @@ TypeError: Cannot read properties of undefined (reading 'map')
             console.log('🚀 Loaded config.js - demoMode:', window.AGENTCORE_CONFIG.demoMode);
         }
     </script>
-    <!-- AWS client for Cognito + AgentCore -->
-    <script src="aws-client.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

@@ -9,15 +9,14 @@
 
 // ===== Configuration =====
 const CONFIG = {
-    // Cognito Identity Pool for direct AWS access
-    identityPoolId: window.AGENTCORE_CONFIG?.identityPoolId || null,
-    runtimeEndpointArn: window.AGENTCORE_CONFIG?.runtimeEndpointArn || null,
+    // API endpoint (Lambda proxy with CORS - from Terraform output)
+    apiEndpoint: window.AGENTCORE_CONFIG?.apiEndpoint || null,
     
-    // Logs API (still uses HTTP API Gateway for simplicity)
+    // Logs API endpoint
     logsApiEndpoint: window.AGENTCORE_CONFIG?.logsApiEndpoint || null,
     
     sessionId: 'sess_' + Math.random().toString(36).substring(2, 10),
-    // Demo mode: true unless Cognito is configured
+    // Demo mode: true unless API endpoint is configured
     demoMode: window.AGENTCORE_CONFIG?.demoMode ?? true,
     githubRawUrl: 'https://raw.githubusercontent.com',
     githubApiUrl: 'https://api.github.com',
@@ -34,20 +33,6 @@ const CONFIG = {
     // AWS Region
     awsRegion: window.AGENTCORE_CONFIG?.region || 'us-east-1',
 };
-
-// AWS Client instance (initialized when needed)
-let awsClient = null;
-
-function getAWSClient() {
-    if (!awsClient && CONFIG.identityPoolId && CONFIG.runtimeEndpointArn) {
-        awsClient = new window.AWSClient({
-            region: CONFIG.awsRegion,
-            identityPoolId: CONFIG.identityPoolId,
-            runtimeEndpointArn: CONFIG.runtimeEndpointArn,
-        });
-    }
-    return awsClient;
-}
 
 // ===== Feature Flags (Blog Post Parts) =====
 // Part 1: Basic agents (Parser, Security, Root Cause, Fix, Supervisor)
@@ -1250,10 +1235,8 @@ async function runAnalysis() {
 // ===== Live Backend Call =====
 
 async function callAgentCoreBackend(errorText) {
-    const client = getAWSClient();
-    
-    if (!client) {
-        throw new Error('AWS not configured. Set identityPoolId and runtimeEndpointArn in config.');
+    if (!CONFIG.apiEndpoint) {
+        throw new Error('API not configured. Set apiEndpoint in config.');
     }
     
     state.startTime = Date.now();
@@ -1263,7 +1246,7 @@ async function callAgentCoreBackend(errorText) {
     // Activate supervisor
     activateNode('node-runtime');
     updateAgentStatus('supervisor', 'running');
-    addLogEntry('SUPERVISOR → Getting AWS credentials...', 'agent-start');
+    addLogEntry('SUPERVISOR → Connecting to AgentCore...', 'agent-start');
     
     const githubRepo = document.getElementById('githubRepo')?.value?.trim() || '';
     
@@ -1279,41 +1262,48 @@ async function callAgentCoreBackend(errorText) {
     };
     
     try {
-        // Get credentials first
-        await client.getCredentials();
-        addLogEntry('✅ Got temporary AWS credentials', 'info');
-        
-        // Build input for AgentCore
-        const inputPayload = JSON.stringify({
-            action: 'analyze',
+        // Build request payload
+        const payload = {
             error_text: errorText,
             github_repo: githubRepo,
-            session_id: CONFIG.sessionId,
+            sessionId: CONFIG.sessionId,
+        };
+        
+        addLogEntry('🚀 Calling AgentCore via API proxy...', 'agent-start');
+        
+        // Call the API proxy (Lambda handles AgentCore invocation)
+        const response = await fetch(`${CONFIG.apiEndpoint}/analyze`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
         });
         
-        addLogEntry('🚀 Calling AgentCore Runtime directly...', 'agent-start');
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(`API error ${response.status}: ${errorData}`);
+        }
         
-        // Call AgentCore with streaming
-        const fullResponse = await client.invokeAgentCoreStreaming(
-            inputPayload,
-            CONFIG.sessionId,
-            (chunk, fullText) => {
-                // Handle streaming chunks
-                // Parse status updates from the stream
-                const statusMatches = chunk.matchAll(/\[\[STATUS:(.*?)\]\]/g);
-                for (const match of statusMatches) {
-                    try {
-                        const status = JSON.parse(match[1]);
-                        handleStatusUpdate(status);
-                    } catch (e) {
-                        console.warn('Failed to parse status:', match[1]);
-                    }
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Unknown error from AgentCore');
+        }
+        
+        // Parse the response
+        const fullResponse = data.result || '';
+        
+        // Process status updates from traces if available
+        if (data.traces) {
+            for (const trace of data.traces) {
+                try {
+                    processTrace(trace);
+                } catch (e) {
+                    console.warn('Failed to process trace:', e);
                 }
-                
-                // Update UI with streaming content
-                updateStreamingResults(fullText);
             }
-        );
+        }
         
         // Parse the final response
         result = parseAgentResponse(fullResponse, result);
@@ -1331,6 +1321,17 @@ async function callAgentCoreBackend(errorText) {
         deactivateNode('node-runtime');
         addLogEntry(`❌ Error: ${error.message}`, 'error');
         throw error;
+    }
+}
+
+function processTrace(trace) {
+    // Process AgentCore trace data to update UI
+    if (trace.orchestrationTrace) {
+        const orch = trace.orchestrationTrace;
+        if (orch.invocationInput?.actionGroupInvocationInput) {
+            const action = orch.invocationInput.actionGroupInvocationInput;
+            addLogEntry(`🔧 Tool: ${action.function || 'unknown'}`, 'tool');
+        }
     }
 }
 

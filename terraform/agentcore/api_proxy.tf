@@ -194,6 +194,8 @@ def handler(event, context):
                 current_tool = None
                 
                 try:
+                    sample_events = []  # Capture first few events for debugging
+                    
                     for line in response_body.iter_lines(chunk_size=1024):
                         if line:
                             line_text = line.decode('utf-8') if isinstance(line, bytes) else line
@@ -201,6 +203,10 @@ def handler(event, context):
                             
                             if line_text.startswith('data: '):
                                 data = line_text[6:]
+                                
+                                # Log first 10 events for debugging
+                                if event_count <= 10:
+                                    sample_events.append(data[:500])
                                 
                                 try:
                                     parsed = json.loads(data)
@@ -212,18 +218,22 @@ def handler(event, context):
                                     event_str = str(parsed)
                                     
                                     # Capture tool calls - remember which tool is being called
-                                    if 'toolUse' in event_str:
+                                    # Look for various indicators of tool use
+                                    if any(x in event_str for x in ['toolUse', 'tool_use', '"name":', 'function_call']):
                                         # Extract tool name using regex (safest approach)
                                         import re
                                         match = re.search(r'"name":\s*"([^"]+)"', event_str)
                                         if match:
                                             tool_name = match.group(1)
-                                            current_tool = tool_name
-                                            agent_activity.append({
-                                                'type': 'tool_call',
-                                                'tool': tool_name,
-                                                'timestamp': event_count
-                                            })
+                                            # Filter out non-tool names
+                                            if tool_name and len(tool_name) > 2 and not tool_name.startswith('content'):
+                                                current_tool = tool_name
+                                                agent_activity.append({
+                                                    'type': 'tool_call',
+                                                    'tool': tool_name,
+                                                    'timestamp': event_count
+                                                })
+                                                logger.info(f"Found tool call: {tool_name}")
                                     
                                     # Capture tool results - extract the actual data
                                     elif 'toolResult' in event_str:
@@ -271,8 +281,20 @@ def handler(event, context):
                                         except Exception as te:
                                             logger.warning(f"Failed to parse tool result: {te}")
                                     
-                                    # Capture final result
+                                    # Capture final result - look for our structured result object
                                     elif 'result' in parsed and 'toolResult' not in event_str:
+                                        result_val = parsed.get('result')
+                                        # Check if this is our structured agent results
+                                        if isinstance(result_val, dict) and any(k in result_val for k in ['parser', 'security', 'rootcause']):
+                                            # This is the final structured result from supervisor
+                                            logger.info("Found structured agent results!")
+                                            agent_results['parser'] = result_val.get('parser')
+                                            agent_results['security'] = result_val.get('security')
+                                            agent_results['context'] = result_val.get('context')
+                                            agent_results['rootcause'] = result_val.get('rootcause')
+                                            agent_results['fix'] = result_val.get('fix')
+                                            agent_results['memory'] = result_val.get('memory')
+                                            agent_results['stats'] = result_val.get('stats')
                                         final_result = parsed
                                     
                                     # Capture final message
@@ -289,6 +311,8 @@ def handler(event, context):
                     
                     logger.info(f"Processed {event_count} events")
                     logger.info(f"Agent results captured: {[k for k, v in agent_results.items() if v]}")
+                    logger.info(f"Agent activity count: {len(agent_activity)}")
+                    logger.info(f"Sample events (first 5): {sample_events[:5]}")
                     
                     # Build comprehensive response with all agent data
                     response_data = {

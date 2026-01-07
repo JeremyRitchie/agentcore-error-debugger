@@ -311,6 +311,9 @@ def parser_agent_tool(error_text: str) -> str:
             update_component_status("parser", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
         
+        # Store in session context for final output
+        update_session_context("parsed", result)
+        
         update_component_status("parser", "success", f"Detected: {language}")
         return json.dumps({"success": True, **result})
     except Exception as e:
@@ -337,6 +340,9 @@ def security_agent_tool(error_text: str) -> str:
         if result.get('error'):
             update_component_status("security", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        # Store in session context for final output
+        update_session_context("security", result)
         
         update_component_status("security", "success", f"Risk: {risk_level} | {secrets} secrets, {pii} PII")
         return json.dumps({"success": True, **result})
@@ -370,6 +376,9 @@ def context_agent_tool(error_message: str, error_type: str = "unknown", language
         if result.get('error'):
             update_component_status("context", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        # Store in session context for final output
+        update_session_context("context", result)
         
         update_component_status("context", "success", f"Found {total_results} external resources")
         return json.dumps({"success": True, **result})
@@ -447,6 +456,9 @@ def rootcause_agent_tool(
             update_component_status("rootcause", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
         
+        # Store in session context for final output
+        update_session_context("analysis", result)
+        
         update_component_status("rootcause", "success", f"{confidence}% confidence (LLM reasoning)")
         return json.dumps({"success": True, **result})
     except Exception as e:
@@ -504,6 +516,9 @@ def fix_agent_tool(
             update_component_status("fix", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
         
+        # Store in session context for final output
+        update_session_context("fix", result)
+        
         update_component_status("fix", "success", f"Generated {fix_type} fix")
         return json.dumps({"success": True, **result})
     except Exception as e:
@@ -540,6 +555,9 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
         if result.get('error'):
             update_component_status("memory", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        # Store in session context for final output
+        update_session_context("memory", result)
         
         update_component_status("memory", "success", f"Found {count} similar errors in memory")
         return json.dumps({"success": True, **result})
@@ -585,6 +603,9 @@ def record_stats(error_type: str, language: str, resolved: bool = False) -> str:
         if result.get('error'):
             update_component_status("stats", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
+        
+        # Store in session context for final output
+        update_session_context("stats", result)
         
         update_component_status("stats", "success", f"Recorded {error_type} occurrence")
         return json.dumps({"success": True, **result})
@@ -1077,6 +1098,22 @@ Follow the full analysis workflow with all agents.
                 yield str(event)
         
         yield f"\n✅ Analysis complete ({event_count} events)\n"
+        
+        # Yield structured results from session_context for frontend
+        final_result = {
+            "result": {
+                "parser": session_context.get("parsed", {}),
+                "security": session_context.get("security", {}),
+                "context": session_context.get("context", {}),
+                "rootcause": session_context.get("analysis", {}),
+                "fix": session_context.get("fix", {}),
+                "memory": session_context.get("memory", {}),
+                "stats": session_context.get("stats", {}),
+            },
+            "eventCount": event_count,
+            "sessionId": session_id
+        }
+        yield json.dumps(final_result)
                 
     except Exception as e:
         error_msg = f"❌ Error during analysis: {str(e)}"

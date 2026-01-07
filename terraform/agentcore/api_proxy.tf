@@ -204,25 +204,20 @@ def handler(event, context):
                                 
                                 try:
                                     parsed = json.loads(data)
+                                    
+                                    # Skip if not a dict
+                                    if not isinstance(parsed, dict):
+                                        continue
+                                    
                                     event_str = str(parsed)
                                     
                                     # Capture tool calls - remember which tool is being called
                                     if 'toolUse' in event_str:
-                                        # Extract tool name
-                                        tool_name = None
-                                        if 'contentBlockStart' in event_str:
-                                            try:
-                                                tool_name = parsed.get('event', {}).get('contentBlockStart', {}).get('start', {}).get('toolUse', {}).get('name')
-                                            except:
-                                                pass
-                                        if not tool_name:
-                                            # Search for name in string
-                                            import re
-                                            match = re.search(r'"name":\s*"([^"]+)"', event_str)
-                                            if match:
-                                                tool_name = match.group(1)
-                                        
-                                        if tool_name:
+                                        # Extract tool name using regex (safest approach)
+                                        import re
+                                        match = re.search(r'"name":\s*"([^"]+)"', event_str)
+                                        if match:
+                                            tool_name = match.group(1)
                                             current_tool = tool_name
                                             agent_activity.append({
                                                 'type': 'tool_call',
@@ -233,57 +228,63 @@ def handler(event, context):
                                     # Capture tool results - extract the actual data
                                     elif 'toolResult' in event_str:
                                         try:
-                                            # Try to extract the tool result content
-                                            tool_result = parsed.get('event', {}).get('contentBlockDelta', {}).get('delta', {}).get('toolResult', {})
-                                            if not tool_result:
-                                                tool_result = parsed.get('toolResult', parsed)
-                                            
-                                            content = tool_result.get('content', [])
-                                            if content and isinstance(content, list):
-                                                for c in content:
-                                                    if 'text' in c:
-                                                        result_text = c['text']
-                                                        # Try to parse as JSON
-                                                        try:
-                                                            result_data = json.loads(result_text)
-                                                        except:
-                                                            result_data = {'raw': result_text[:1000]}
-                                                        
-                                                        # Map to agent based on current_tool or content
-                                                        if current_tool:
-                                                            tool_lower = current_tool.lower()
-                                                            if 'parse' in tool_lower:
-                                                                agent_results['parser'] = result_data
-                                                            elif 'security' in tool_lower:
-                                                                agent_results['security'] = result_data
-                                                            elif 'context' in tool_lower or 'research' in tool_lower:
-                                                                agent_results['context'] = result_data
-                                                            elif 'root' in tool_lower or 'cause' in tool_lower:
-                                                                agent_results['rootcause'] = result_data
-                                                            elif 'fix' in tool_lower:
-                                                                agent_results['fix'] = result_data
-                                                            elif 'memory' in tool_lower:
-                                                                agent_results['memory'] = result_data
-                                                            elif 'stats' in tool_lower:
-                                                                agent_results['stats'] = result_data
-                                                        
-                                                        agent_activity.append({
-                                                            'type': 'tool_result',
-                                                            'tool': current_tool,
-                                                            'hasData': True
-                                                        })
+                                            # Use regex to find JSON content in tool result
+                                            import re
+                                            # Look for the text content in toolResult
+                                            text_match = re.search(r'"text":\s*"((?:[^"\\]|\\.)*)"', event_str)
+                                            if text_match:
+                                                result_text = text_match.group(1)
+                                                # Unescape JSON string
+                                                result_text = result_text.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+                                                
+                                                # Try to parse as JSON
+                                                try:
+                                                    result_data = json.loads(result_text)
+                                                    if not isinstance(result_data, dict):
+                                                        result_data = {'raw': str(result_data)[:1000]}
+                                                except:
+                                                    result_data = {'raw': str(result_text)[:1000]}
+                                                
+                                                # Map to agent based on current_tool
+                                                if current_tool and isinstance(result_data, dict):
+                                                    tool_lower = current_tool.lower()
+                                                    if 'parse' in tool_lower:
+                                                        agent_results['parser'] = result_data
+                                                    elif 'security' in tool_lower:
+                                                        agent_results['security'] = result_data
+                                                    elif 'context' in tool_lower or 'research' in tool_lower:
+                                                        agent_results['context'] = result_data
+                                                    elif 'root' in tool_lower or 'cause' in tool_lower:
+                                                        agent_results['rootcause'] = result_data
+                                                    elif 'fix' in tool_lower:
+                                                        agent_results['fix'] = result_data
+                                                    elif 'memory' in tool_lower:
+                                                        agent_results['memory'] = result_data
+                                                    elif 'stats' in tool_lower:
+                                                        agent_results['stats'] = result_data
+                                                
+                                                agent_activity.append({
+                                                    'type': 'tool_result',
+                                                    'tool': current_tool,
+                                                    'hasData': True
+                                                })
                                         except Exception as te:
                                             logger.warning(f"Failed to parse tool result: {te}")
                                     
                                     # Capture final result
-                                    elif 'result' in parsed and not 'toolResult' in event_str:
+                                    elif 'result' in parsed and 'toolResult' not in event_str:
                                         final_result = parsed
                                     
                                     # Capture final message
-                                    elif 'message' in parsed and parsed.get('message', {}).get('role') == 'assistant':
-                                        final_message = parsed
+                                    elif 'message' in parsed:
+                                        msg = parsed.get('message')
+                                        if isinstance(msg, dict) and msg.get('role') == 'assistant':
+                                            final_message = parsed
                                         
                                 except json.JSONDecodeError:
+                                    pass
+                                except Exception as parse_err:
+                                    # Log but continue processing
                                     pass
                     
                     logger.info(f"Processed {event_count} events")
@@ -297,14 +298,19 @@ def handler(event, context):
                         'agents': agent_results,  # Data from each agent
                     }
                     
-                    if final_result:
-                        response_data['result'] = final_result.get('result', final_result)
+                    if final_result and isinstance(final_result, dict):
+                        response_data['result'] = final_result.get('result', str(final_result))
                         response_data['fullResponse'] = final_result
-                    elif final_message:
-                        content = final_message.get('message', {}).get('content', [])
-                        if content and isinstance(content, list):
-                            text_parts = [c.get('text', '') for c in content if 'text' in c]
-                            response_data['result'] = '\n'.join(text_parts)
+                    elif final_message and isinstance(final_message, dict):
+                        msg = final_message.get('message')
+                        if isinstance(msg, dict):
+                            content = msg.get('content', [])
+                            if content and isinstance(content, list):
+                                text_parts = []
+                                for c in content:
+                                    if isinstance(c, dict) and 'text' in c:
+                                        text_parts.append(c.get('text', ''))
+                                response_data['result'] = '\n'.join(text_parts)
                         response_data['fullResponse'] = final_message
                     else:
                         response_data['result'] = f"Analysis complete ({event_count} events)"

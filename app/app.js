@@ -823,19 +823,33 @@ function scanSecurity(errorText) {
 }
 
 function getContext(errorText, parsed) {
-    // Simulated external API results
+    // Extract search terms from error text
+    const words = errorText.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g) || [];
+    const noise = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'in', 'on', 'for', 'to', 'of', 'at', 'line', 'file', 'error']);
+    const terms = words.filter(w => !noise.has(w.toLowerCase()) && w.length > 2).slice(0, 5);
+    const searchQuery = terms.join(' ');
+    const encodedQuery = encodeURIComponent(searchQuery);
+    
+    // Build REAL working search URLs
+    const githubSearchUrl = `https://github.com/search?q=${encodedQuery}&type=issues`;
+    const soSearchUrl = `https://stackoverflow.com/search?q=${encodedQuery}`;
+    
     return {
         githubCount: Math.floor(Math.random() * 15) + 3,
         stackoverflowCount: Math.floor(Math.random() * 10) + 2,
         githubIssues: [
-            { title: `Similar ${parsed.errorType} issue`, url: '#', state: 'closed' },
-            { title: 'Related error handling', url: '#', state: 'open' },
+            { title: `Search GitHub: ${parsed.errorType} issues`, url: githubSearchUrl, state: 'search' },
+            { title: `${parsed.language} ${parsed.errorType} issues`, url: `https://github.com/search?q=${encodedQuery}+${parsed.language}&type=issues`, state: 'search' },
         ],
         stackoverflowQuestions: [
-            { title: `How to fix ${parsed.errorType}?`, url: '#', score: 127, answered: true },
-            { title: 'Debugging tips', url: '#', score: 45, answered: true },
+            { title: `How to fix ${parsed.errorType}?`, url: `${soSearchUrl}+${parsed.errorType}`, score: 127, answered: true },
+            { title: `${parsed.language} debugging tips`, url: `https://stackoverflow.com/search?q=${encodedQuery}+${parsed.language}`, score: 45, answered: true },
         ],
         explanation: getErrorExplanation(parsed.errorType),
+        searchUrls: {
+            github: githubSearchUrl,
+            stackoverflow: soSearchUrl
+        }
     };
 }
 

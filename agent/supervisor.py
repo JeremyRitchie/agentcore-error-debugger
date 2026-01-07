@@ -31,25 +31,20 @@ FEATURE_PART = int(os.environ.get('FEATURE_PART', '2'))
 # Demo mode (true = simulated, false = real APIs)
 DEMO_MODE = os.environ.get('DEMO_MODE', 'true').lower() in ('true', '1', 'yes')
 
-# Part 1 agents (always imported)
+# Gateway Tools - Lambda functions called via Gateway (Parser, Security, Context, Stats)
+from agents import gateway_tools
+
+# Local agents that run in Runtime (Root Cause, Fix - LLM heavy)
 from agents import (
-    parser_agent,
-    security_agent,
     rootcause_agent,
     fix_agent,
 )
 
-# Part 2 agents (conditionally imported)
+# Part 2 agents (Memory runs locally for low latency)
 if FEATURE_PART >= 2:
-    from agents import (
-        context_agent,
-        memory_agent,
-        stats_agent,
-    )
+    from agents import memory_agent
 else:
-    context_agent = None
     memory_agent = None
-    stats_agent = None
 
 # ============================================================================
 # AgentCore Runtime App
@@ -151,59 +146,59 @@ def event_loop_tracker(**kwargs):
 
 
 # ============================================================================
-# PARSER AGENT TOOL (Uses: Regex, Comprehend, AST)
+# PARSER TOOL (Lambda via Gateway)
 # ============================================================================
 @tool(
     name="parser_agent_tool",
-    description="Parse error messages to extract structured information: stack frames, programming language, error type classification. Uses regex patterns, AST parsing, and Comprehend language detection."
+    description="Parse error messages to extract structured information: stack frames, programming language, error type classification. Calls Parser Lambda via Gateway."
 )
 def parser_agent_tool(error_text: str) -> str:
-    """Route parsing to the Parser Agent with Regex/AST/Comprehend tools."""
-    logger.info(f"📋 Invoking ParserAgent with {len(error_text)} chars")
+    """Call Parser Lambda via Gateway to parse error messages."""
+    logger.info(f"📋 Calling Parser Lambda via Gateway ({len(error_text)} chars)")
     try:
-        result = parser_agent.parse(error_text)
-        logger.info(f"✅ ParserAgent returned: {result.get('error_type', 'unknown')}")
+        result = gateway_tools.parse_error(error_text)
+        logger.info(f"✅ Parser Lambda returned: {result.get('error_type', 'unknown')}")
         return json.dumps(result)
     except Exception as e:
-        logger.error(f"❌ ParserAgent error: {str(e)}")
+        logger.error(f"❌ Parser Lambda error: {str(e)}")
         return json.dumps({"error": str(e), "error_type": "unknown"})
 
 
 # ============================================================================
-# SECURITY AGENT TOOL (Uses: Comprehend PII, Regex secrets)
+# SECURITY TOOL (Lambda via Gateway)
 # ============================================================================
 @tool(
     name="security_agent_tool",
-    description="Scan error messages for security issues: PII using AWS Comprehend, hardcoded secrets using regex patterns. Provides redacted versions safe for logging."
+    description="Scan error messages for security issues: PII detection, hardcoded secrets. Calls Security Lambda via Gateway."
 )
 def security_agent_tool(error_text: str) -> str:
-    """Route security scanning to the Security Agent with Comprehend/Regex tools."""
-    logger.info(f"🔒 Invoking SecurityAgent with {len(error_text)} chars")
+    """Call Security Lambda via Gateway to scan for sensitive data."""
+    logger.info(f"🔒 Calling Security Lambda via Gateway ({len(error_text)} chars)")
     try:
-        result = security_agent.scan(error_text)
-        logger.info(f"✅ SecurityAgent returned: risk_level={result.get('risk_level', 'unknown')}")
+        result = gateway_tools.scan_security(error_text)
+        logger.info(f"✅ Security Lambda returned: risk_level={result.get('risk_level', 'unknown')}")
         return json.dumps(result)
     except Exception as e:
-        logger.error(f"❌ SecurityAgent error: {str(e)}")
+        logger.error(f"❌ Security Lambda error: {str(e)}")
         return json.dumps({"error": str(e), "risk_level": "unknown"})
 
 
 # ============================================================================
-# CONTEXT AGENT TOOL (Uses: GitHub API, StackOverflow API)
+# CONTEXT TOOL (Lambda via Gateway)
 # ============================================================================
 @tool(
     name="context_agent_tool",
-    description="Search external resources for error context: GitHub Issues API, Stack Overflow API, official documentation. Finds similar issues and community solutions."
+    description="Search external resources for error context: GitHub Issues, Stack Overflow. Calls Context Lambda via Gateway."
 )
 def context_agent_tool(error_message: str, error_type: str = "unknown", language: str = "unknown") -> str:
-    """Route context research to the Context Agent with external API tools."""
-    logger.info(f"🔍 Invoking ContextAgent for {error_type} in {language}")
+    """Call Context Lambda via Gateway to search external resources."""
+    logger.info(f"🔍 Calling Context Lambda via Gateway for {error_type} in {language}")
     try:
-        result = context_agent.research(error_message, error_type, language)
-        logger.info(f"✅ ContextAgent returned: {result.get('total_resources', 0)} resources")
+        result = gateway_tools.search_context(error_message, language)
+        logger.info(f"✅ Context Lambda returned: {result.get('total_results', 0)} results")
         return json.dumps(result)
     except Exception as e:
-        logger.error(f"❌ ContextAgent error: {str(e)}")
+        logger.error(f"❌ Context Lambda error: {str(e)}")
         return json.dumps({"error": str(e), "github_issues": [], "stackoverflow_questions": []})
 
 
@@ -297,35 +292,35 @@ def store_session(context_type: str, content: str) -> str:
 
 
 # ============================================================================
-# STATS TOOLS (Uses: Time-series, frequency analysis)
+# STATS TOOLS (Lambda via Gateway)
 # ============================================================================
 @tool(
     name="record_stats",
-    description="Record error statistics for the current debugging session. Tracks error types, languages, and resolution times."
+    description="Record error statistics. Calls Stats Lambda via Gateway to persist to DynamoDB."
 )
-def record_stats(error_type: str, language: str, resolution_time: float = 0) -> str:
-    """Record error statistics."""
-    logger.info(f"📊 Recording stats: {error_type}")
+def record_stats(error_type: str, language: str, resolved: bool = False) -> str:
+    """Call Stats Lambda via Gateway to record an error occurrence."""
+    logger.info(f"📊 Calling Stats Lambda to record: {error_type}")
     try:
-        result = stats_agent.record(error_type, language, resolution_time)
+        result = gateway_tools.record_error(error_type, language, resolved)
         return json.dumps(result)
     except Exception as e:
-        logger.error(f"❌ Record stats error: {str(e)}")
+        logger.error(f"❌ Stats Lambda error: {str(e)}")
         return json.dumps({"error": str(e)})
 
 
 @tool(
     name="get_trend",
-    description="Analyze error trends - detect if errors are increasing or decreasing over time. Compares current period to previous period."
+    description="Analyze error trends. Calls Stats Lambda via Gateway to query DynamoDB."
 )
 def get_trend(error_type: str = "", window_days: int = 7) -> str:
-    """Get error trend analysis."""
-    logger.info(f"📈 Getting trend for: {error_type or 'all'}")
+    """Call Stats Lambda via Gateway to get trend analysis."""
+    logger.info(f"📈 Calling Stats Lambda for trend: {error_type or 'all'}")
     try:
-        result = stats_agent.get_trend(error_type, window_days)
+        result = gateway_tools.get_trend(error_type, window_days)
         return json.dumps(result)
     except Exception as e:
-        logger.error(f"❌ Get trend error: {str(e)}")
+        logger.error(f"❌ Stats Lambda error: {str(e)}")
         return json.dumps({"error": str(e)})
 
 

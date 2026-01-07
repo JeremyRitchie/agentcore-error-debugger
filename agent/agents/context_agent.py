@@ -362,75 +362,92 @@ def _extract_search_terms(text: str) -> List[str]:
 
 
 def _get_simulated_github_results(error_message: str, language: str) -> List[Dict]:
-    """Simulate GitHub Issues API results (for demo mode)."""
+    """Simulate GitHub Issues API results with REAL working search URLs."""
+    import urllib.parse
+    
     error_lower = error_message.lower()
+    
+    # Extract search terms
+    words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', error_message)
+    noise = {'the', 'a', 'an', 'is', 'are', 'was', 'in', 'on', 'for', 'to', 'of', 'at', 'line', 'file'}
+    terms = [w for w in words if w.lower() not in noise and len(w) > 2][:5]
+    search_query = ' '.join(terms)
+    encoded_query = urllib.parse.quote(search_query)
     
     results = []
     
     if "undefined" in error_lower or "null" in error_lower:
         results.append({
-            "title": "Cannot read property of undefined in React component",
-            "url": "https://github.com/facebook/react/issues/example1",
-            "state": "closed",
-            "comments": 15,
-            "created_at": "2024-01-15",
-            "labels": ["bug", "good first issue"]
+            "title": "Cannot read property of undefined - similar issues",
+            "url": f"https://github.com/search?q={encoded_query}+undefined&type=issues",
+            "state": "search",
+            "comments": 0,
+            "created_at": "",
+            "labels": ["search-result"]
         })
     
     if "module" in error_lower or "import" in error_lower:
         results.append({
-            "title": "ModuleNotFoundError when importing from src",
-            "url": "https://github.com/python/cpython/issues/example2",
-            "state": "closed",
-            "comments": 8,
-            "created_at": "2024-02-20",
-            "labels": ["import", "resolved"]
+            "title": "ModuleNotFoundError / ImportError issues",
+            "url": f"https://github.com/search?q={encoded_query}+import+error&type=issues",
+            "state": "search",
+            "comments": 0,
+            "created_at": "",
+            "labels": ["search-result"]
         })
     
     if "connection" in error_lower or "timeout" in error_lower:
         results.append({
-            "title": "Connection timeout on high load",
-            "url": "https://github.com/psf/requests/issues/example3",
-            "state": "open",
-            "comments": 23,
-            "created_at": "2024-03-10",
-            "labels": ["networking", "help wanted"]
+            "title": "Connection/Timeout related issues",
+            "url": f"https://github.com/search?q={encoded_query}+connection&type=issues",
+            "state": "search",
+            "comments": 0,
+            "created_at": "",
+            "labels": ["search-result"]
         })
     
-    # Add generic results
+    # Always add a general search link
     results.append({
-        "title": f"Error similar to: {error_message[:50]}...",
-        "url": "https://github.com/search?type=issues",
-        "state": "open",
-        "comments": 5,
-        "created_at": "2024-04-01",
-        "labels": ["needs-investigation"]
+        "title": f"Search GitHub: {search_query[:50]}",
+        "url": f"https://github.com/search?q={encoded_query}&type=issues",
+        "state": "search",
+        "comments": 0,
+        "created_at": "",
+        "labels": ["general-search"]
     })
     
     return results
 
 
 def _get_simulated_stackoverflow_results(error_message: str, tags: str) -> List[Dict]:
-    """Simulate Stack Overflow API results (for demo mode)."""
+    """Simulate Stack Overflow API results with REAL working search URLs."""
+    import urllib.parse
+    
     error_lower = error_message.lower()
+    
+    # Extract search terms
+    words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', error_message)
+    noise = {'the', 'a', 'an', 'is', 'are', 'was', 'in', 'on', 'for', 'to', 'of', 'at', 'line', 'file'}
+    terms = [w for w in words if w.lower() not in noise and len(w) > 2][:5]
+    search_query = ' '.join(terms)
+    encoded_query = urllib.parse.quote(search_query)
     
     results = []
     
     if "undefined" in error_lower or "null" in error_lower:
         results.append({
             "title": "How to fix 'Cannot read property of undefined'?",
-            "url": "https://stackoverflow.com/questions/example1",
+            "url": f"https://stackoverflow.com/search?q={encoded_query}+undefined",
             "score": 245,
             "answer_count": 12,
             "is_answered": True,
-            "accepted_answer_id": 12345,
             "tags": ["javascript", "react", "undefined"]
         })
     
     if "type" in error_lower:
         results.append({
-            "title": "TypeError: X is not a function - what does it mean?",
-            "url": "https://stackoverflow.com/questions/example2",
+            "title": "TypeError troubleshooting",
+            "url": f"https://stackoverflow.com/search?q={encoded_query}+TypeError",
             "score": 189,
             "answer_count": 8,
             "is_answered": True,
@@ -439,21 +456,22 @@ def _get_simulated_stackoverflow_results(error_message: str, tags: str) -> List[
     
     if "import" in error_lower or "module" in error_lower:
         results.append({
-            "title": "Python ImportError: No module named X",
-            "url": "https://stackoverflow.com/questions/example3",
+            "title": "Python ImportError: No module named",
+            "url": f"https://stackoverflow.com/search?q={encoded_query}+import",
             "score": 567,
             "answer_count": 15,
             "is_answered": True,
             "tags": ["python", "import", "module"]
         })
     
+    # Always add general search
     results.append({
-        "title": f"How to debug: {error_message[:40]}...",
-        "url": "https://stackoverflow.com/search",
-        "score": 45,
-        "answer_count": 3,
-        "is_answered": True,
-        "tags": ["debugging", "error-handling"]
+        "title": f"Search Stack Overflow: {search_query[:40]}",
+        "url": f"https://stackoverflow.com/search?q={encoded_query}",
+        "score": 0,
+        "answer_count": 0,
+        "is_answered": False,
+        "tags": ["search"]
     })
     
     return results

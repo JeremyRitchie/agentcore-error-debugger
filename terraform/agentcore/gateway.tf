@@ -202,6 +202,169 @@ resource "aws_bedrockagentcore_gateway_target" "security" {
   depends_on = [aws_lambda_function.security]
 }
 
+# ============================================================================
+# Context Tool Target (GitHub/StackOverflow search)
+# ============================================================================
+resource "aws_bedrockagentcore_gateway_target" "context" {
+  name               = "${local.resource_prefix}-context"
+  gateway_identifier = aws_bedrockagentcore_gateway.main.gateway_id
+  description        = "Search GitHub Issues and Stack Overflow for error context"
+
+  credential_provider_configuration {
+    gateway_iam_role {}
+  }
+
+  target_configuration {
+    mcp {
+      lambda {
+        lambda_arn = aws_lambda_function.context.arn
+
+        tool_schema {
+          inline_payload {
+            name        = "search_error_context"
+            description = "Search GitHub Issues and Stack Overflow for similar errors and solutions"
+
+            input_schema {
+              property {
+                name        = "error_text"
+                type        = "string"
+                description = "The error message to search for"
+                required    = true
+              }
+
+              property {
+                name        = "language"
+                type        = "string"
+                description = "Programming language (optional filter)"
+              }
+            }
+
+            output_schema {
+              property {
+                name = "query"
+                type = "string"
+              }
+
+              property {
+                name = "github_issues"
+                type = "array"
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name = "stackoverflow_questions"
+                type = "array"
+                items {
+                  type = "object"
+                }
+              }
+
+              property {
+                name = "total_results"
+                type = "number"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [aws_lambda_function.context]
+}
+
+# ============================================================================
+# Stats Tool Target (Error tracking and trends)
+# ============================================================================
+resource "aws_bedrockagentcore_gateway_target" "stats" {
+  name               = "${local.resource_prefix}-stats"
+  gateway_identifier = aws_bedrockagentcore_gateway.main.gateway_id
+  description        = "Record and query error statistics and trends"
+
+  credential_provider_configuration {
+    gateway_iam_role {}
+  }
+
+  target_configuration {
+    mcp {
+      lambda {
+        lambda_arn = aws_lambda_function.stats.arn
+
+        tool_schema {
+          inline_payload {
+            name        = "manage_error_stats"
+            description = "Record error occurrences and query frequency/trends"
+
+            input_schema {
+              property {
+                name        = "action"
+                type        = "string"
+                description = "Action: record, get_frequency, or get_trend"
+                required    = true
+              }
+
+              property {
+                name        = "error_type"
+                type        = "string"
+                description = "Type of error (e.g., null_reference, type_error)"
+              }
+
+              property {
+                name        = "language"
+                type        = "string"
+                description = "Programming language"
+              }
+
+              property {
+                name        = "days"
+                type        = "number"
+                description = "Number of days for frequency calculation"
+              }
+
+              property {
+                name        = "window_days"
+                type        = "number"
+                description = "Window size for trend detection"
+              }
+            }
+
+            output_schema {
+              property {
+                name = "success"
+                type = "boolean"
+              }
+
+              property {
+                name = "error_type"
+                type = "string"
+              }
+
+              property {
+                name = "count"
+                type = "number"
+              }
+
+              property {
+                name = "trend"
+                type = "string"
+              }
+
+              property {
+                name = "frequency_per_day"
+                type = "number"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [aws_lambda_function.stats]
+}
+
 output "gateway_id" {
   description = "AgentCore Gateway ID"
   value       = aws_bedrockagentcore_gateway.main.gateway_id

@@ -1,6 +1,7 @@
 # ===== API Proxy for AgentCore =====
 # Required because AWS APIs don't support CORS for browser access
-# Browser → API Gateway (CORS) → Lambda → AgentCore Runtime
+# Browser → Lambda Function URL (CORS) → Lambda → AgentCore Runtime
+# Using Lambda Function URL instead of API Gateway for 15 min timeout support
 
 # Lambda function to proxy requests to AgentCore
 resource "aws_lambda_function" "api_proxy" {
@@ -8,8 +9,8 @@ resource "aws_lambda_function" "api_proxy" {
   role          = aws_iam_role.api_proxy.arn
   handler       = "index.handler"
   runtime       = "python3.12"
-  timeout       = 300  # 5 minutes for long agent operations
-  memory_size   = 256
+  timeout       = 900  # 15 minutes max for long agent operations
+  memory_size   = 512  # More memory for processing
 
   filename         = data.archive_file.api_proxy.output_path
   source_code_hash = data.archive_file.api_proxy.output_base64sha256
@@ -346,61 +347,23 @@ resource "aws_iam_role_policy_attachment" "api_proxy" {
   policy_arn = aws_iam_policy.api_proxy.arn
 }
 
-# API Gateway HTTP API
-resource "aws_apigatewayv2_api" "api_proxy" {
-  name          = "${local.resource_prefix}-api"
-  protocol_type = "HTTP"
+# Lambda Function URL - supports up to 15 min timeout (no API Gateway 30s limit)
+resource "aws_lambda_function_url" "api_proxy" {
+  function_name      = aws_lambda_function.api_proxy.function_name
+  authorization_type = "NONE"  # Public access
 
-  cors_configuration {
-    allow_origins = ["*"]
-    allow_methods = ["POST", "OPTIONS"]
-    allow_headers = ["Content-Type", "Authorization"]
-    max_age       = 300
-  }
-
-  tags = {
-    Name = "${local.resource_prefix}-api"
+  cors {
+    allow_origins     = ["*"]
+    allow_methods     = ["POST", "OPTIONS"]
+    allow_headers     = ["Content-Type", "Authorization"]
+    allow_credentials = false
+    max_age           = 300
   }
 }
 
-# Lambda integration
-resource "aws_apigatewayv2_integration" "api_proxy" {
-  api_id                 = aws_apigatewayv2_api.api_proxy.id
-  integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.api_proxy.invoke_arn
-  payload_format_version = "2.0"
-}
-
-# Route for analyze endpoint
-resource "aws_apigatewayv2_route" "analyze" {
-  api_id    = aws_apigatewayv2_api.api_proxy.id
-  route_key = "POST /analyze"
-  target    = "integrations/${aws_apigatewayv2_integration.api_proxy.id}"
-}
-
-# Default stage with auto-deploy
-resource "aws_apigatewayv2_stage" "api_proxy" {
-  api_id      = aws_apigatewayv2_api.api_proxy.id
-  name        = "$default"
-  auto_deploy = true
-
-  tags = {
-    Name = "${local.resource_prefix}-api-stage"
-  }
-}
-
-# Lambda permission for API Gateway
-resource "aws_lambda_permission" "api_proxy" {
-  statement_id  = "AllowAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.api_proxy.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.api_proxy.execution_arn}/*/*"
-}
-
-# Output the API endpoint
+# Output the Lambda Function URL
 output "api_endpoint" {
-  value       = aws_apigatewayv2_api.api_proxy.api_endpoint
-  description = "API Gateway endpoint for AgentCore proxy"
+  value       = trimsuffix(aws_lambda_function_url.api_proxy.function_url, "/")
+  description = "Lambda Function URL for AgentCore proxy (15 min timeout)"
 }
 

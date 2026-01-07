@@ -53,8 +53,8 @@ output "log_groups" {
 output "frontend_config" {
   description = "Configuration to inject into the frontend"
   value = {
-    # API endpoint (Lambda proxy with CORS)
-    apiEndpoint = aws_apigatewayv2_api.api_proxy.api_endpoint
+    # API endpoint (Lambda Function URL with CORS - 15 min timeout)
+    apiEndpoint = trimsuffix(aws_lambda_function_url.api_proxy.function_url, "/")
     region      = local.region
     
     # Logs API

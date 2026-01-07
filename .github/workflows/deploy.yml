@@ -188,7 +188,7 @@ jobs:
           echo "| Resource | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Runtime | \`${{ steps.tf-outputs.outputs.runtime_id }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Cognito Pool | \`${{ steps.tf-outputs.outputs.cognito_pool_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| API Endpoint | \`${{ steps.tf-outputs.outputs.api_endpoint }}\` |" >> $GITHUB_STEP_SUMMARY
           if [ "${{ env.FEATURE_PART }}" == "2" ]; then
             echo "| Memory | \`${{ steps.tf-outputs.outputs.memory_id }}\` |" >> $GITHUB_STEP_SUMMARY
           fi

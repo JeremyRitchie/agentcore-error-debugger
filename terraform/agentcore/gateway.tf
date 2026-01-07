@@ -49,19 +49,6 @@ resource "aws_iam_policy" "agentcore_gateway" {
           aws_lambda_function.parser.arn,
           aws_lambda_function.security.arn
         ]
-      },
-      {
-        Sid    = "CloudWatchLogs"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "logs:DescribeLogStreams"
-        ]
-        Resource = [
-          "${aws_cloudwatch_log_group.gateway.arn}",
-          "${aws_cloudwatch_log_group.gateway.arn}:*"
-        ]
       }
     ]
   })
@@ -72,17 +59,8 @@ resource "aws_iam_role_policy_attachment" "agentcore_gateway" {
   policy_arn = aws_iam_policy.agentcore_gateway.arn
 }
 
-# CloudWatch Log Group for Gateway
-resource "aws_cloudwatch_log_group" "gateway" {
-  name              = "/aws/bedrock-agentcore/${local.resource_prefix}-gateway"
-  retention_in_days = 14
-
-  tags = {
-    Name = "${local.resource_prefix}-gateway-logs"
-  }
-}
-
 # AgentCore Gateway
+# Note: Gateway logging is handled via CloudWatch Logs Insights on the associated Lambda logs
 resource "aws_bedrockagentcore_gateway" "main" {
   name            = "${local.resource_prefix}-gateway"
   description     = "Error Debugger - MCP Gateway"
@@ -90,18 +68,10 @@ resource "aws_bedrockagentcore_gateway" "main" {
   authorizer_type = "AWS_IAM"
   role_arn        = aws_iam_role.agentcore_gateway.arn
 
-  # Logging configuration
-  logging_configuration {
-    log_group_name = aws_cloudwatch_log_group.gateway.name
-    log_level      = "INFO"
-  }
-
   tags = {
     Name        = "${local.resource_prefix}-gateway"
     Environment = var.environment
   }
-
-  depends_on = [aws_cloudwatch_log_group.gateway]
 }
 
 # Gateway Target - Parser Tool (extract stack frames, detect language, classify error)

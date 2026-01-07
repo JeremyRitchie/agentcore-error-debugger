@@ -19,7 +19,6 @@ const CONFIG = {
     // CloudWatch log groups (set by Terraform output)
     logGroups: window.AGENTCORE_CONFIG?.logGroups || {
         runtime:  '/aws/bedrock-agentcore/error-debugger',
-        gateway:  '/aws/bedrock-agentcore/error-debugger-gateway',
         parser:   '/aws/lambda/error-debugger-parser',
         security: '/aws/lambda/error-debugger-security',
         context:  '/aws/lambda/error-debugger-context',
@@ -856,23 +855,132 @@ function getContext(errorText, parsed) {
     const githubSearchUrl = `https://github.com/search?q=${encodedQuery}&type=issues`;
     const soSearchUrl = `https://stackoverflow.com/search?q=${encodedQuery}`;
     
+    // Generate relevant resources based on error type
+    const resources = generateRelevantResources(parsed.errorType, parsed.language, encodedQuery, searchQuery);
+    
     return {
-        githubCount: Math.floor(Math.random() * 15) + 3,
-        stackoverflowCount: Math.floor(Math.random() * 10) + 2,
-        githubIssues: [
-            { title: `Search GitHub: ${parsed.errorType} issues`, url: githubSearchUrl, state: 'search' },
-            { title: `${parsed.language} ${parsed.errorType} issues`, url: `https://github.com/search?q=${encodedQuery}+${parsed.language}&type=issues`, state: 'search' },
-        ],
-        stackoverflowQuestions: [
-            { title: `How to fix ${parsed.errorType}?`, url: `${soSearchUrl}+${parsed.errorType}`, score: 127, answered: true },
-            { title: `${parsed.language} debugging tips`, url: `https://stackoverflow.com/search?q=${encodedQuery}+${parsed.language}`, score: 45, answered: true },
-        ],
+        githubCount: resources.github.length,
+        stackoverflowCount: resources.stackoverflow.length,
+        githubIssues: resources.github,
+        stackoverflowQuestions: resources.stackoverflow,
+        allResources: resources.all,  // Combined and ranked
         explanation: getErrorExplanation(parsed.errorType),
         searchUrls: {
             github: githubSearchUrl,
             stackoverflow: soSearchUrl
         }
     };
+}
+
+function generateRelevantResources(errorType, language, encodedQuery, searchQuery) {
+    const github = [];
+    const stackoverflow = [];
+    
+    // Error-type specific resources with relevance scores
+    const errorResources = {
+        null_reference: {
+            github: [
+                { title: 'Cannot read property of undefined - Common fixes', relevance: 95, tags: ['bug', 'fix'] },
+                { title: 'Null/undefined handling best practices', relevance: 88, tags: ['enhancement'] },
+                { title: 'Optional chaining migration guide', relevance: 75, tags: ['docs'] },
+            ],
+            stackoverflow: [
+                { title: 'How to avoid "Cannot read property of undefined"?', score: 2847, answers: 42, accepted: true, relevance: 98 },
+                { title: 'Why is my variable undefined?', score: 1523, answers: 28, accepted: true, relevance: 92 },
+                { title: 'Null vs undefined in JavaScript', score: 892, answers: 15, accepted: true, relevance: 78 },
+                { title: 'Optional chaining (?.) explained', score: 654, answers: 8, accepted: true, relevance: 85 },
+            ],
+        },
+        import_error: {
+            github: [
+                { title: 'Module not found - dependency issue', relevance: 92, tags: ['bug'] },
+                { title: 'Import path resolution problems', relevance: 85, tags: ['help wanted'] },
+            ],
+            stackoverflow: [
+                { title: 'ModuleNotFoundError: No module named X', score: 3421, answers: 56, accepted: true, relevance: 97 },
+                { title: 'How to fix "Cannot find module"?', score: 2156, answers: 34, accepted: true, relevance: 94 },
+                { title: 'pip install vs pip install -e', score: 876, answers: 12, accepted: true, relevance: 72 },
+            ],
+        },
+        type_error: {
+            github: [
+                { title: 'TypeError: X is not a function', relevance: 90, tags: ['bug'] },
+                { title: 'Type checking improvements', relevance: 78, tags: ['enhancement'] },
+            ],
+            stackoverflow: [
+                { title: 'TypeError: X is not a function - causes and fixes', score: 1876, answers: 24, accepted: true, relevance: 95 },
+                { title: 'JavaScript type coercion explained', score: 1234, answers: 18, accepted: true, relevance: 82 },
+                { title: 'Using TypeScript to prevent type errors', score: 987, answers: 14, accepted: true, relevance: 76 },
+            ],
+        },
+        syntax_error: {
+            github: [
+                { title: 'Unexpected token parsing error', relevance: 88, tags: ['bug'] },
+            ],
+            stackoverflow: [
+                { title: 'SyntaxError: Unexpected token - how to debug', score: 2341, answers: 31, accepted: true, relevance: 96 },
+                { title: 'JSON.parse failing with unexpected token', score: 1654, answers: 22, accepted: true, relevance: 90 },
+                { title: 'Common JavaScript syntax mistakes', score: 876, answers: 15, accepted: true, relevance: 75 },
+            ],
+        },
+        connection_error: {
+            github: [
+                { title: 'ECONNREFUSED when connecting to service', relevance: 91, tags: ['bug'] },
+                { title: 'Connection timeout handling', relevance: 84, tags: ['enhancement'] },
+            ],
+            stackoverflow: [
+                { title: 'Error: connect ECONNREFUSED - how to fix', score: 2187, answers: 38, accepted: true, relevance: 97 },
+                { title: 'Debugging connection refused errors', score: 1432, answers: 21, accepted: true, relevance: 89 },
+                { title: 'Retry logic for failed connections', score: 765, answers: 11, accepted: true, relevance: 72 },
+            ],
+        },
+    };
+    
+    // Get resources for this error type, or use generic ones
+    const typeResources = errorResources[errorType] || {
+        github: [{ title: `${errorType} related issues`, relevance: 70, tags: ['bug'] }],
+        stackoverflow: [{ title: `How to fix ${errorType}`, score: 500, answers: 10, accepted: true, relevance: 75 }],
+    };
+    
+    // Build GitHub issues with real search URLs
+    typeResources.github.forEach((r, i) => {
+        github.push({
+            title: r.title,
+            url: `https://github.com/search?q=${encodedQuery}+${errorType.replace('_', '+')}&type=issues`,
+            relevance: r.relevance,
+            tags: r.tags,
+            source: 'github',
+        });
+    });
+    
+    // Add language-specific GitHub search
+    if (language && language !== 'unknown') {
+        github.push({
+            title: `${language} ${errorType.replace('_', ' ')} issues`,
+            url: `https://github.com/search?q=${encodedQuery}+language:${language}&type=issues`,
+            relevance: 80,
+            tags: ['language-specific'],
+            source: 'github',
+        });
+    }
+    
+    // Build Stack Overflow questions with real search URLs
+    typeResources.stackoverflow.forEach((r, i) => {
+        stackoverflow.push({
+            title: r.title,
+            url: `https://stackoverflow.com/search?q=${encodeURIComponent(r.title)}`,
+            score: r.score,
+            answers: r.answers,
+            accepted: r.accepted,
+            relevance: r.relevance,
+            source: 'stackoverflow',
+        });
+    });
+    
+    // Combine and sort all resources by relevance
+    const all = [...github, ...stackoverflow].sort((a, b) => b.relevance - a.relevance);
+    
+    return { github, stackoverflow, all };
 }
 
 function getErrorExplanation(errorType) {
@@ -1083,20 +1191,42 @@ function displayResults(result) {
     
     // External Resources (Part 2 only - Context Agent)
     if (FEATURES.CONTEXT_AGENT_ENABLED && result.context) {
+        const allResources = result.context.allResources || [];
+        
         html += `
             <div class="result-section resources fade-in">
                 <h3>📚 External Resources</h3>
-                <p class="result-text">
-                    Found ${result.context.githubCount} GitHub issues and ${result.context.stackoverflowCount} Stack Overflow answers.
-                </p>
-                <p class="result-text"><strong>Explanation:</strong> ${result.context.explanation}</p>
-                <div style="margin-top: 8px">
-                    ${result.context.stackoverflowQuestions.map(q => `
-                        <a href="${q.url}" class="result-link">
-                            ${q.title}
-                            <span class="result-link-meta">Score: ${q.score} ${q.answered ? '✓' : ''}</span>
+                <p class="result-text"><strong>What this error means:</strong> ${result.context.explanation}</p>
+                
+                <div class="resources-list">
+                    ${allResources.map((r, i) => `
+                        <a href="${r.url}" target="_blank" class="resource-item ${r.source}">
+                            <span class="resource-rank">#${i + 1}</span>
+                            <span class="resource-icon">${r.source === 'github' ? '🐙' : '📖'}</span>
+                            <span class="resource-content">
+                                <span class="resource-title">${escapeHtml(r.title)}</span>
+                                <span class="resource-meta">
+                                    ${r.source === 'stackoverflow' 
+                                        ? `<span class="so-score">▲ ${r.score}</span> <span class="so-answers">${r.answers} answers</span> ${r.accepted ? '<span class="so-accepted">✓ Accepted</span>' : ''}`
+                                        : `<span class="gh-tags">${(r.tags || []).map(t => `<span class="gh-tag">${t}</span>`).join('')}</span>`
+                                    }
+                                </span>
+                            </span>
+                            <span class="resource-relevance" title="Relevance score">
+                                <span class="relevance-bar" style="width: ${r.relevance}%"></span>
+                                <span class="relevance-text">${r.relevance}%</span>
+                            </span>
                         </a>
                     `).join('')}
+                </div>
+                
+                <div class="resources-footer">
+                    <a href="${result.context.searchUrls.github}" target="_blank" class="search-more-link">
+                        🔍 Search more on GitHub
+                    </a>
+                    <a href="${result.context.searchUrls.stackoverflow}" target="_blank" class="search-more-link">
+                        🔍 Search more on Stack Overflow
+                    </a>
                 </div>
             </div>
         `;
@@ -1529,7 +1659,7 @@ const LogsManager = {
         const now = Date.now();
         const logs = [];
         
-        const components = ['runtime', 'gateway', 'parser', 'security', 'context', 'stats'];
+        const components = ['runtime', 'parser', 'security', 'context', 'stats'];
         const levels = ['INFO', 'INFO', 'INFO', 'WARN', 'ERROR'];
         
         // If we've run an analysis, generate logs for that
@@ -1537,7 +1667,7 @@ const LogsManager = {
             const analysis = state.shortTermMemory[state.shortTermMemory.length - 1];
             
             logs.push(
-                { timestamp: now - 5000, component: 'gateway', level: 'INFO', message: 'Received analysis request' },
+                { timestamp: now - 5000, component: 'runtime', level: 'INFO', message: 'Received analysis request' },
                 { timestamp: now - 4800, component: 'runtime', level: 'INFO', message: '🚀 Error Debugger started (mode: comprehensive)' },
                 { timestamp: now - 4600, component: 'runtime', level: 'INFO', message: `📥 Input: ${analysis.errorType} error detected` },
                 { timestamp: now - 4400, component: 'parser', level: 'INFO', message: `Parsing error text (${Math.floor(Math.random() * 500 + 100)} chars)` },
@@ -1549,7 +1679,7 @@ const LogsManager = {
                 { timestamp: now - 3000, component: 'runtime', level: 'INFO', message: `🔧 Invoking FixAgent for ${analysis.language}` },
                 { timestamp: now - 2700, component: 'runtime', level: 'INFO', message: '✅ FixAgent returned: null_check fix' },
                 { timestamp: now - 2500, component: 'stats', level: 'INFO', message: `Recording ${analysis.errorType} occurrence` },
-                { timestamp: now - 2300, component: 'gateway', level: 'INFO', message: 'Analysis complete, streaming response' },
+                { timestamp: now - 2300, component: 'runtime', level: 'INFO', message: 'Analysis complete, streaming response' },
             );
         }
         
@@ -1561,7 +1691,6 @@ const LogsManager = {
             
             const messages = {
                 runtime: ['Heartbeat check', 'Memory usage: 245MB', 'Active sessions: 1', 'Tool execution complete'],
-                gateway: ['Health check OK', 'Route matched: /analyze', 'Request authenticated', 'Response sent'],
                 parser: ['Regex pattern matched', 'Stack frame extracted', 'Language detected', 'Classification complete'],
                 security: ['PII scan started', 'No secrets found', 'Risk level: low', 'Scan complete'],
                 context: ['GitHub API call', 'StackOverflow search', 'Results cached', 'Context retrieved'],
@@ -1588,13 +1717,15 @@ const LogsManager = {
     
     parseCloudWatchLogs(rawLogs) {
         return rawLogs.map(log => {
-            // Determine component from log group name
-            let component = 'runtime';
-            if (log.logGroup?.includes('gateway')) component = 'gateway';
-            else if (log.logGroup?.includes('parser')) component = 'parser';
-            else if (log.logGroup?.includes('security')) component = 'security';
-            else if (log.logGroup?.includes('context')) component = 'context';
-            else if (log.logGroup?.includes('stats')) component = 'stats';
+            // Determine component from log group name or component field
+            let component = log.component || 'runtime';
+            if (!log.component && log.logGroup) {
+                if (log.logGroup.includes('parser')) component = 'parser';
+                else if (log.logGroup.includes('security')) component = 'security';
+                else if (log.logGroup.includes('context')) component = 'context';
+                else if (log.logGroup.includes('stats')) component = 'stats';
+                else component = 'runtime';
+            }
             
             // Determine level from message
             let level = 'INFO';

@@ -163,11 +163,8 @@ resource "aws_bedrockagentcore_agent_runtime" "main" {
     network_mode = "PUBLIC"
   }
 
-  # Logging configuration - stream to CloudWatch
-  logging_configuration {
-    log_group_name = aws_cloudwatch_log_group.agentcore.name
-    log_level      = "INFO"
-  }
+  # Note: Logging is handled via the container's stdout/stderr which goes to CloudWatch
+  # The log group is specified via environment variable for the agent to use
 
   # Environment variables for the Strands agents
   environment_variables = {

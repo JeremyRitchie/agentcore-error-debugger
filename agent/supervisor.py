@@ -27,7 +27,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 # Configuration
 # ============================================================================
 # Import shared config to ensure consistency across all agents
-from agents.config import DEMO_MODE, FEATURE_PART, AWS_REGION
+from agents.config import DEMO_MODE, FEATURE_PART, AWS_REGION, BEDROCK_MODEL_ID
 
 # Gateway Tools - Lambda functions called via Gateway (Parser, Security, Context, Stats)
 from agents import gateway_tools
@@ -993,11 +993,15 @@ def build_tools_list():
     
     return tools
 
+# Create supervisor with explicit model - don't use Strands default!
 supervisor = Agent(
+    model=BedrockModel(model_id=BEDROCK_MODEL_ID),  # Use Haiku 4.5, not Sonnet 4
     system_prompt=SUPERVISOR_PROMPT,
     tools=build_tools_list(),
     callback_handler=event_loop_tracker
 )
+
+logger.info(f"🤖 Supervisor using model: {BEDROCK_MODEL_ID}")
 
 # ============================================================================
 # AgentCore Runtime Entrypoint
@@ -1019,10 +1023,10 @@ async def error_debugger(payload, context):
         user_input = payload.get("prompt", "") if isinstance(payload, dict) else str(payload)
         session_id = payload.get("session_id", "unknown") if isinstance(payload, dict) else "unknown"
         mode = payload.get("mode", "comprehensive") if isinstance(payload, dict) else "comprehensive"
-        
-        # Set session context for logging
-        session_filter.set_session_id(session_id)
-        
+    
+    # Set session context for logging
+    session_filter.set_session_id(session_id)
+    
         yield f"🔍 Starting error analysis...\n"
         yield f"📋 Mode: {mode}\n"
         
@@ -1031,10 +1035,10 @@ async def error_debugger(payload, context):
             return
         
         logger.info(f"Input: {user_input[:200]}...")
-        
-        # Bypass tool consent for automation
-        os.environ["BYPASS_TOOL_CONSENT"] = "true"
-        
+    
+    # Bypass tool consent for automation
+    os.environ["BYPASS_TOOL_CONSENT"] = "true"
+    
         # Build prompt
         if mode == "quick":
             prompt = f"""Quickly analyze this error:
@@ -1063,8 +1067,8 @@ Follow the full analysis workflow with all agents.
             event_count += 1
             
             if isinstance(event, dict):
-                if "data" in event:
-                    yield event["data"]
+            if "data" in event:
+                yield event["data"]
                 elif "text" in event:
                     yield event["text"]
                 elif "content" in event:

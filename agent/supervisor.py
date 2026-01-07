@@ -20,14 +20,14 @@ import json
 import logging
 from datetime import datetime
 from strands import Agent, tool
-from strands.models import BedrockModel
+# BedrockModel not needed - using Strands default
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 # ============================================================================
 # Configuration
 # ============================================================================
 # Import shared config to ensure consistency across all agents
-from agents.config import DEMO_MODE, FEATURE_PART, AWS_REGION, BEDROCK_MODEL_ID
+from agents.config import DEMO_MODE, FEATURE_PART, AWS_REGION
 
 # Gateway Tools - Lambda functions called via Gateway (Parser, Security, Context, Stats)
 from agents import gateway_tools
@@ -993,15 +993,14 @@ def build_tools_list():
     
     return tools
 
-# Create supervisor with explicit model - don't use Strands default!
+# Create supervisor - uses Strands default model (Sonnet 4)
 supervisor = Agent(
-    model=BedrockModel(model_id=BEDROCK_MODEL_ID),  # Use Haiku 4.5, not Sonnet 4
     system_prompt=SUPERVISOR_PROMPT,
     tools=build_tools_list(),
     callback_handler=event_loop_tracker
 )
 
-logger.info(f"🤖 Supervisor using model: {BEDROCK_MODEL_ID}")
+logger.info("🤖 Supervisor initialized with default Strands model")
 
 # ============================================================================
 # AgentCore Runtime Entrypoint

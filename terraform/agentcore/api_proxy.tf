@@ -111,12 +111,12 @@ def handler(event, context):
         logger.info(f"Session ID: {session_id}")
         
         # Build the input for the agent supervisor
-        # The supervisor expects a JSON payload with action and error details
+        # The supervisor expects: prompt (the error text), session_id, mode
         input_payload = json.dumps({
-            'action': 'analyze',
-            'error_text': error_text,
-            'github_repo': github_repo,
-            'session_id': session_id
+            'prompt': error_text,  # Agent expects "prompt" not "error_text"
+            'session_id': session_id,
+            'mode': 'comprehensive',
+            'github_repo': github_repo
         })
         
         # Call invoke_agent_runtime with correct parameter names
@@ -130,30 +130,56 @@ def handler(event, context):
             accept='application/json'
         )
         
-        logger.info(f"AgentCore response received")
+        # Log the full response structure for debugging
+        response_keys = list(response.keys())
+        logger.info(f"AgentCore response keys: {response_keys}")
         
-        # Read the response payload
+        # Read the response payload (may be a StreamingBody)
         result_bytes = response.get('payload', b'')
         if hasattr(result_bytes, 'read'):
             result_bytes = result_bytes.read()
         
         result_text = result_bytes.decode('utf-8') if isinstance(result_bytes, bytes) else str(result_bytes)
         
-        logger.info(f"Response (first 500 chars): {result_text[:500]}")
+        logger.info(f"Response length: {len(result_text)}")
+        logger.info(f"Response (first 1000 chars): {result_text[:1000]}")
+        
+        # Check for empty response
+        if not result_text or result_text.strip() == '':
+            logger.warning("Empty response from AgentCore!")
+            return {
+                'statusCode': 200,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'success': False,
+                    'error': 'Empty response from AgentCore runtime',
+                    'debug': {
+                        'responseKeys': response_keys,
+                        'runtimeArn': AGENT_RUNTIME_ARN,
+                        'sessionId': session_id,
+                        'inputPayloadLength': len(input_payload)
+                    }
+                })
+            }
         
         # Try to parse as JSON
         try:
             result_json = json.loads(result_text)
-        except json.JSONDecodeError:
+            logger.info(f"Parsed JSON keys: {list(result_json.keys()) if isinstance(result_json, dict) else 'not a dict'}")
+        except json.JSONDecodeError as jde:
+            logger.warning(f"Response is not JSON: {jde}")
             result_json = {'result': result_text}
         
+        # Return the full response for debugging
         return {
             'statusCode': 200,
             'headers': cors_headers,
             'body': json.dumps({
                 'success': True,
-                'result': result_json.get('result', result_text),
-                'traces': result_json.get('traces', []),
+                'result': result_json.get('result', result_text) if isinstance(result_json, dict) else result_text,
+                'fullResponse': result_json,
+                'rawText': result_text[:2000],  # First 2000 chars for debugging
+                'traces': result_json.get('traces', []) if isinstance(result_json, dict) else [],
                 'sessionId': session_id
             })
         }

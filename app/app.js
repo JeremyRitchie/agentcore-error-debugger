@@ -1294,6 +1294,21 @@ async function callAgentCoreBackend(errorText) {
         // Parse the response
         const fullResponse = data.result || '';
         
+        // Debug logging
+        console.log('📥 AgentCore Response:', {
+            success: data.success,
+            resultLength: fullResponse.length,
+            resultPreview: fullResponse.substring(0, 500),
+            fullData: data,
+            rawText: data.rawText,
+            fullResponseObj: data.fullResponse
+        });
+        
+        // If we got fullResponse object, try to use it
+        if (data.fullResponse && typeof data.fullResponse === 'object') {
+            console.log('📦 Full response object keys:', Object.keys(data.fullResponse));
+        }
+        
         // Process status updates from traces if available
         if (data.traces) {
             for (const trace of data.traces) {
@@ -1307,6 +1322,9 @@ async function callAgentCoreBackend(errorText) {
         
         // Parse the final response
         result = parseAgentResponse(fullResponse, result);
+        
+        // Debug: Log parsed result
+        console.log('📊 Parsed result:', result);
         
         // Mark supervisor complete
         updateAgentStatus('supervisor', 'complete');

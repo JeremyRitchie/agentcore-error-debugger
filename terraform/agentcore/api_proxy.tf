@@ -211,6 +211,14 @@ def handler(event, context):
                                 try:
                                     parsed = json.loads(data)
                                     
+                                    # Handle double-encoding: AgentCore wraps yields as JSON strings
+                                    # So json.loads returns a string that needs to be parsed again
+                                    if isinstance(parsed, str):
+                                        try:
+                                            parsed = json.loads(parsed)
+                                        except:
+                                            continue  # Not parseable, skip
+                                    
                                     # Skip if not a dict
                                     if not isinstance(parsed, dict):
                                         continue

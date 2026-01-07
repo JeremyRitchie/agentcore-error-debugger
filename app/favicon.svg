@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea"/>
+      <stop offset="100%" style="stop-color:#764ba2"/>
+    </linearGradient>
+    <linearGradient id="bug" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f56565"/>
+      <stop offset="100%" style="stop-color:#ed64a6"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="32" cy="32" r="30" fill="url(#bg)"/>
+  
+  <!-- Bug body -->
+  <ellipse cx="32" cy="36" rx="12" ry="14" fill="url(#bug)"/>
+  
+  <!-- Bug head -->
+  <circle cx="32" cy="20" r="8" fill="url(#bug)"/>
+  
+  <!-- Antennae -->
+  <path d="M28 14 L24 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+  <path d="M36 14 L40 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="24" cy="5" r="2" fill="#fff"/>
+  <circle cx="40" cy="5" r="2" fill="#fff"/>
+  
+  <!-- Eyes -->
+  <circle cx="28" cy="19" r="2.5" fill="#fff"/>
+  <circle cx="36" cy="19" r="2.5" fill="#fff"/>
+  <circle cx="28.5" cy="19.5" r="1" fill="#333"/>
+  <circle cx="36.5" cy="19.5" r="1" fill="#333"/>
+  
+  <!-- Legs -->
+  <path d="M20 30 L12 26" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+  <path d="M20 36 L10 36" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+  <path d="M20 42 L12 46" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+  <path d="M44 30 L52 26" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+  <path d="M44 36 L54 36" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+  <path d="M44 42 L52 46" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+  
+  <!-- Magnifying glass (debugger symbol) -->
+  <circle cx="46" cy="48" r="8" fill="none" stroke="#4ade80" stroke-width="3"/>
+  <path d="M52 54 L58 60" stroke="#4ade80" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- Checkmark inside magnifying glass -->
+  <path d="M42 48 L45 51 L50 44" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
+

@@ -42,7 +42,7 @@ const FEATURES = {
     get GITHUB_INTEGRATION_ENABLED() { return this.PART >= 2; },
     get LIVE_ARCHITECTURE_ENABLED() { return this.PART >= 2; },
     get ACTIVITY_LOG_ENABLED() { return this.PART >= 2; },
-    get PRESEEDED_MEMORY_ENABLED() { return this.PART >= 2; },
+    get PRESEEDED_MEMORY_ENABLED() { return false; },  // Disabled - no static patterns
     
     // Part 1 features (always enabled)
     get PARSER_AGENT_ENABLED() { return true; },
@@ -134,26 +134,10 @@ const state = {
 };
 
 // ===== Pre-seeded Memory =====
-const PRE_SEEDED_MEMORY = [
-    {
-        type: 'null_reference',
-        signature: 'cannot_read_map_undefined',
-        solution: 'Add optional chaining: data?.map()',
-        successCount: 15,
-    },
-    {
-        type: 'import_error',
-        signature: 'module_not_found',
-        solution: 'Run npm install or pip install',
-        successCount: 12,
-    },
-    {
-        type: 'connection_error',
-        signature: 'econnrefused',
-        solution: 'Verify service is running, check port',
-        successCount: 8,
-    },
-];
+// REMOVED: No static pre-seeded patterns
+// Memory should only contain patterns stored from actual successful debugging sessions
+// The backend memory agent handles this - frontend just displays what backend returns
+const PRE_SEEDED_MEMORY = [];  // Empty - no fake data
 
 // ===== Sample Errors =====
 const SAMPLE_ERRORS = [
@@ -322,7 +306,7 @@ async function simulateAnalysis(errorText) {
     updateStats();
     result.parsed = parseError(errorText);
     updateAgentOutput('parser', 
-        `${result.parsed.language} | ${result.parsed.errorType}`);
+        `${result.parsed.language} detected`);
     
     // 4. Security - always enabled (Part 1 core)
     await runAgent('security', 'Scanning for PII/secrets...', 300);
@@ -775,46 +759,39 @@ function updateStats() {
 // ===== Analysis Functions =====
 
 function searchMemory(errorText) {
-    const lower = errorText.toLowerCase();
-    const matches = PRE_SEEDED_MEMORY.filter(m => 
-        lower.includes('undefined') && m.type === 'null_reference' ||
-        lower.includes('module') && m.type === 'import_error' ||
-        lower.includes('connect') && m.type === 'connection_error'
-    );
-    
+    // DEMO MODE ONLY: Return empty - real memory search is done by backend
+    // No static pattern matching - the backend LLM handles this
     return {
-        count: matches.length,
-        matches: matches,
-        hasSolution: matches.length > 0,
+        count: 0,
+        matches: [],
+        hasSolution: false,
+        note: 'Demo mode: Memory search handled by backend in live mode'
     };
 }
 
 function parseError(errorText) {
-    // Detect language
+    // DEMO MODE ONLY: Basic structural extraction
+    // NO static error type classification - the backend LLM handles this
+    
+    // Detect language from file extensions (structural, not semantic)
     let language = 'unknown';
     if (errorText.includes('.tsx') || errorText.includes('.ts')) language = 'typescript';
     else if (errorText.includes('.js')) language = 'javascript';
     else if (errorText.includes('.py')) language = 'python';
     else if (errorText.includes('.go')) language = 'go';
+    else if (errorText.includes('.tf')) language = 'terraform';
     
-    // Classify error type
-    let errorType = 'unknown';
-    const lower = errorText.toLowerCase();
-    if (lower.includes('typeerror') || lower.includes('undefined')) errorType = 'null_reference';
-    else if (lower.includes('importerror') || lower.includes('module')) errorType = 'import_error';
-    else if (lower.includes('syntaxerror')) errorType = 'syntax_error';
-    else if (lower.includes('connect') || lower.includes('refused')) errorType = 'connection_error';
-    
-    // Count frames
+    // Count frames (structural extraction only)
     const frameCount = (errorText.match(/at\s+\w+/g) || []).length;
     
     return {
         language,
         languageConfidence: language !== 'unknown' ? 85 : 0,
-        errorType,
-        errorTypeConfidence: errorType !== 'unknown' ? 90 : 30,
+        // NO errorType - LLM will analyze this
         frameCount,
         coreMessage: errorText.split('\n')[0].substring(0, 100),
+        rawError: errorText.substring(0, 1000),
+        note: 'Demo mode: Full parsing done by backend in live mode'
     };
 }
 
@@ -876,191 +853,82 @@ function generateRelevantResources(errorType, language, encodedQuery, searchQuer
     const github = [];
     const stackoverflow = [];
     
-    // Error-type specific resources with relevance scores
-    const errorResources = {
-        null_reference: {
-            github: [
-                { title: 'Cannot read property of undefined - Common fixes', relevance: 95, tags: ['bug', 'fix'] },
-                { title: 'Null/undefined handling best practices', relevance: 88, tags: ['enhancement'] },
-                { title: 'Optional chaining migration guide', relevance: 75, tags: ['docs'] },
-            ],
-            stackoverflow: [
-                { title: 'How to avoid "Cannot read property of undefined"?', score: 2847, answers: 42, accepted: true, relevance: 98 },
-                { title: 'Why is my variable undefined?', score: 1523, answers: 28, accepted: true, relevance: 92 },
-                { title: 'Null vs undefined in JavaScript', score: 892, answers: 15, accepted: true, relevance: 78 },
-                { title: 'Optional chaining (?.) explained', score: 654, answers: 8, accepted: true, relevance: 85 },
-            ],
-        },
-        import_error: {
-            github: [
-                { title: 'Module not found - dependency issue', relevance: 92, tags: ['bug'] },
-                { title: 'Import path resolution problems', relevance: 85, tags: ['help wanted'] },
-            ],
-            stackoverflow: [
-                { title: 'ModuleNotFoundError: No module named X', score: 3421, answers: 56, accepted: true, relevance: 97 },
-                { title: 'How to fix "Cannot find module"?', score: 2156, answers: 34, accepted: true, relevance: 94 },
-                { title: 'pip install vs pip install -e', score: 876, answers: 12, accepted: true, relevance: 72 },
-            ],
-        },
-        type_error: {
-            github: [
-                { title: 'TypeError: X is not a function', relevance: 90, tags: ['bug'] },
-                { title: 'Type checking improvements', relevance: 78, tags: ['enhancement'] },
-            ],
-            stackoverflow: [
-                { title: 'TypeError: X is not a function - causes and fixes', score: 1876, answers: 24, accepted: true, relevance: 95 },
-                { title: 'JavaScript type coercion explained', score: 1234, answers: 18, accepted: true, relevance: 82 },
-                { title: 'Using TypeScript to prevent type errors', score: 987, answers: 14, accepted: true, relevance: 76 },
-            ],
-        },
-        syntax_error: {
-            github: [
-                { title: 'Unexpected token parsing error', relevance: 88, tags: ['bug'] },
-            ],
-            stackoverflow: [
-                { title: 'SyntaxError: Unexpected token - how to debug', score: 2341, answers: 31, accepted: true, relevance: 96 },
-                { title: 'JSON.parse failing with unexpected token', score: 1654, answers: 22, accepted: true, relevance: 90 },
-                { title: 'Common JavaScript syntax mistakes', score: 876, answers: 15, accepted: true, relevance: 75 },
-            ],
-        },
-        connection_error: {
-            github: [
-                { title: 'ECONNREFUSED when connecting to service', relevance: 91, tags: ['bug'] },
-                { title: 'Connection timeout handling', relevance: 84, tags: ['enhancement'] },
-            ],
-            stackoverflow: [
-                { title: 'Error: connect ECONNREFUSED - how to fix', score: 2187, answers: 38, accepted: true, relevance: 97 },
-                { title: 'Debugging connection refused errors', score: 1432, answers: 21, accepted: true, relevance: 89 },
-                { title: 'Retry logic for failed connections', score: 765, answers: 11, accepted: true, relevance: 72 },
-            ],
-        },
-    };
+    // DEMO MODE ONLY: Generate search links based on error text
+    // NO static error type mapping - just create search URLs from the actual error
+    // Real search is done by backend context agent
     
-    // Get resources for this error type, or use generic ones
-    const typeResources = errorResources[errorType] || {
-        github: [{ title: `${errorType} related issues`, relevance: 70, tags: ['bug'] }],
-        stackoverflow: [{ title: `How to fix ${errorType}`, score: 500, answers: 10, accepted: true, relevance: 75 }],
-    };
+    // Extract key terms from error message (first line or first 100 chars)
+    const errorLine = errorMessage.split('\n')[0].substring(0, 100);
+    const searchQuery = encodeURIComponent(errorLine);
     
-    // Build GitHub issues with real search URLs
-    typeResources.github.forEach((r, i) => {
-        github.push({
-            title: r.title,
-            url: `https://github.com/search?q=${encodedQuery}+${errorType.replace('_', '+')}&type=issues`,
-            relevance: r.relevance,
-            tags: r.tags,
-            source: 'github',
-        });
+    // GitHub search link
+    github.push({
+        title: `Search GitHub for: "${errorLine.substring(0, 50)}..."`,
+        url: `https://github.com/search?q=${searchQuery}&type=issues`,
+        relevance: 80,
+        tags: ['search'],
+        source: 'github',
+        note: 'Demo mode: Real search done by backend'
     });
     
-    // Add language-specific GitHub search
+    // Add language-specific search if detected
     if (language && language !== 'unknown') {
         github.push({
-            title: `${language} ${errorType.replace('_', ' ')} issues`,
-            url: `https://github.com/search?q=${encodedQuery}+language:${language}&type=issues`,
-            relevance: 80,
+            title: `${language} issues matching this error`,
+            url: `https://github.com/search?q=${searchQuery}+language:${language}&type=issues`,
+            relevance: 75,
             tags: ['language-specific'],
             source: 'github',
         });
     }
     
-    // Build Stack Overflow questions with real search URLs
-    typeResources.stackoverflow.forEach((r, i) => {
-        stackoverflow.push({
-            title: r.title,
-            url: `https://stackoverflow.com/search?q=${encodeURIComponent(r.title)}`,
-            score: r.score,
-            answers: r.answers,
-            accepted: r.accepted,
-            relevance: r.relevance,
-            source: 'stackoverflow',
-        });
+    // Stack Overflow search link
+    stackoverflow.push({
+        title: `Search Stack Overflow for: "${errorLine.substring(0, 50)}..."`,
+        url: `https://stackoverflow.com/search?q=${searchQuery}`,
+        score: 0,
+        answers: 0,
+        accepted: false,
+        relevance: 80,
+        source: 'stackoverflow',
+        note: 'Demo mode: Real search done by backend'
     });
     
-    // Combine and sort all resources by relevance
+    // Combine
     const all = [...github, ...stackoverflow].sort((a, b) => b.relevance - a.relevance);
     
-    return { github, stackoverflow, all };
+    return { github, stackoverflow, all, note: 'Demo mode: Actual resources fetched by backend' };
 }
 
 function getErrorExplanation(errorType) {
-    const explanations = {
-        null_reference: 'Attempting to access a property or method on a null/undefined value.',
-        import_error: 'Failed to load a required module or package.',
-        syntax_error: 'Code structure doesn\'t follow language grammar rules.',
-        connection_error: 'Failed to establish network connection.',
-    };
-    return explanations[errorType] || 'Unknown error type.';
+    // DEMO MODE ONLY: Return generic message
+    // Real explanation is generated by backend LLM
+    return 'Analysis pending - the backend will provide detailed explanation.';
 }
 
 function analyzeRootCause(errorText, parsed, codeContext) {
-    const causes = {
-        null_reference: {
-            rootCause: 'Array or object is undefined when accessed. Likely async data not loaded yet.',
-            solution: 'Add null check or optional chaining before accessing properties.',
-            confidence: codeContext?.hasContext ? 95 : 90,  // Higher with code context
-        },
-        import_error: {
-            rootCause: 'Module not installed or wrong import path.',
-            solution: 'Run package manager install command, verify module name.',
-            confidence: 85,
-        },
-        syntax_error: {
-            rootCause: 'Invalid JSON or syntax error in code.',
-            solution: 'Validate JSON format, check for missing brackets.',
-            confidence: 80,
-        },
-        connection_error: {
-            rootCause: 'Target service not running or network issue.',
-            solution: 'Verify service is running and port is correct.',
-            confidence: 75,
-        },
-    };
-    
-    return causes[parsed.errorType] || {
-        rootCause: 'Unable to determine specific cause.',
-        solution: 'Manual investigation required.',
-        confidence: 40,
+    // DEMO MODE ONLY: Return placeholder
+    // Real root cause analysis is done by backend LLM - no static patterns
+    return {
+        rootCause: 'Root cause analysis pending - the backend LLM will analyze this error.',
+        solution: 'Solution will be generated by the backend.',
+        confidence: 0,
+        note: 'Demo mode: Actual analysis done by backend rootcause agent'
     };
 }
 
 function generateFix(rootCause, language, codeContext) {
-    const fixes = {
-        javascript: {
-            null_reference: {
-                fixType: 'null_check',
-                before: 'data.map(item => item.name)',
-                after: 'data?.map(item => item.name) || []',
-                explanation: 'Optional chaining prevents access on undefined',
-            },
-        },
-        typescript: {
-            null_reference: {
-                fixType: 'null_check',
-                before: 'data.map(item => item.name)',
-                after: 'data?.map(item => item.name) ?? []',
-                explanation: 'Optional chaining with nullish coalescing',
-            },
-        },
-        python: {
-            import_error: {
-                fixType: 'install_module',
-                before: 'import pandas as pd',
-                after: '# Run: pip install pandas\nimport pandas as pd',
-                explanation: 'Install missing package',
-            },
-        },
+    // DEMO MODE ONLY: Return placeholder
+    // Real fix generation is done by backend LLM - no static templates
+    const fix = {
+        fixType: 'pending',
+        before: '// Original code',
+        after: '// Fix will be generated by backend LLM',
+        explanation: 'Fix generation pending - the backend will analyze the error and generate a specific fix.',
+        note: 'Demo mode: Actual fix generated by backend fix agent'
     };
     
-    const langFixes = fixes[language] || fixes.javascript;
-    const fix = langFixes.null_reference || {
-        fixType: 'error_handling',
-        before: 'riskyOperation()',
-        after: 'try {\n  riskyOperation()\n} catch (e) {\n  handleError(e)\n}',
-        explanation: 'Wrap in try-catch for error handling',
-    };
-    
-    // If we have code context, use the actual code
+    // If we have code context, include it for display
     if (codeContext?.hasContext && codeContext.files?.length > 0) {
         const file = codeContext.files[0];
         fix.sourceFile = file.path;
@@ -1075,7 +943,6 @@ function generateFix(rootCause, language, codeContext) {
 function recordStats(parsed) {
     state.shortTermMemory.push({
         type: 'analyzed_error',
-        errorType: parsed.errorType,
         language: parsed.language,
         timestamp: new Date().toISOString(),
     });
@@ -1113,7 +980,6 @@ function displayResults(result) {
             <h3>📋 Parsed Information</h3>
             <p class="result-text">
                 <strong>Language:</strong> ${result.parsed.language} (${result.parsed.languageConfidence}%)<br>
-                <strong>Error Type:</strong> ${result.parsed.errorType}<br>
                 <strong>Stack Frames:</strong> ${result.parsed.frameCount}<br>
                 <strong>Message:</strong> ${result.parsed.coreMessage}
             </p>
@@ -1264,7 +1130,7 @@ function updateMemoryDisplay() {
                 <div class="memory-item-header">
                     <span class="memory-item-type">${m.type}</span>
                 </div>
-                <div class="memory-item-text">${m.errorType} (${m.language})</div>
+                <div class="memory-item-text">${m.language} error analyzed</div>
             </div>
         `).join('');
     }
@@ -1401,7 +1267,7 @@ async function callAgentCoreBackend(errorText) {
         
         let fullResponse = '';
         let result = {
-            parsed: { language: 'unknown', errorType: 'unknown', languageConfidence: 0, frameCount: 0, coreMessage: '' },
+            parsed: { language: 'unknown', languageConfidence: 0, frameCount: 0, coreMessage: '' },
             security: { riskLevel: 'low', secretsFound: 0, piiFound: 0, safeToStore: true, recommendations: [] },
             memory: { count: 0, matches: [], hasSolution: false },
             context: { githubCount: 0, stackoverflowCount: 0, allResources: [], explanation: '', searchUrls: {} },
@@ -1893,7 +1759,7 @@ const LogsManager = {
             logs.push(
                 { timestamp: now - 5000, component: 'runtime', level: 'INFO', message: 'Received analysis request' },
                 { timestamp: now - 4800, component: 'runtime', level: 'INFO', message: '🚀 Error Debugger started (mode: comprehensive)' },
-                { timestamp: now - 4600, component: 'runtime', level: 'INFO', message: `📥 Input: ${analysis.errorType} error detected` },
+                { timestamp: now - 4600, component: 'runtime', level: 'INFO', message: `📥 Input: ${analysis.language} error received` },
                 { timestamp: now - 4400, component: 'parser', level: 'INFO', message: `Parsing error text (${Math.floor(Math.random() * 500 + 100)} chars)` },
                 { timestamp: now - 4200, component: 'parser', level: 'INFO', message: `✅ Detected language: ${analysis.language}` },
                 { timestamp: now - 4000, component: 'security', level: 'INFO', message: 'Scanning for PII and secrets...' },
@@ -1901,8 +1767,8 @@ const LogsManager = {
                 { timestamp: now - 3500, component: 'runtime', level: 'INFO', message: '🎯 Invoking RootCauseAgent' },
                 { timestamp: now - 3200, component: 'runtime', level: 'INFO', message: `✅ RootCauseAgent returned: 85% confidence` },
                 { timestamp: now - 3000, component: 'runtime', level: 'INFO', message: `🔧 Invoking FixAgent for ${analysis.language}` },
-                { timestamp: now - 2700, component: 'runtime', level: 'INFO', message: '✅ FixAgent returned: null_check fix' },
-                { timestamp: now - 2500, component: 'stats', level: 'INFO', message: `Recording ${analysis.errorType} occurrence` },
+                { timestamp: now - 2700, component: 'runtime', level: 'INFO', message: '✅ FixAgent returned fix' },
+                { timestamp: now - 2500, component: 'stats', level: 'INFO', message: `Recording ${analysis.language} error occurrence` },
                 { timestamp: now - 2300, component: 'runtime', level: 'INFO', message: 'Analysis complete, streaming response' },
             );
         }

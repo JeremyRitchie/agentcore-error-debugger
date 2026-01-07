@@ -2,8 +2,8 @@
 Parser Agent - Extracts structured information from error messages
 Tools: Regex-based parsing, language detection, error classification
 
-Uses regex-based parsing for stack traces and error classification.
-Language detection uses Comprehend in live mode, regex patterns in demo mode.
+Uses regex for structural extraction (stack traces, file paths).
+Uses LLM fallback for ambiguous language/error detection.
 """
 import re
 import json
@@ -16,20 +16,26 @@ from .config import DEMO_MODE, AWS_REGION
 
 logger = logging.getLogger(__name__)
 
-# Initialize AWS client for language detection (only in live mode)
-comprehend_client = None
-if not DEMO_MODE:
-    try:
-        comprehend_client = boto3.client('comprehend', region_name=AWS_REGION)
-        logger.info("✅ Comprehend client initialized for language detection")
-    except Exception as e:
-        logger.warning(f"⚠️ Comprehend client init failed: {e}")
+# Initialize AWS clients
+bedrock_runtime = None
+try:
+    bedrock_runtime = boto3.client('bedrock-runtime', region_name=AWS_REGION)
+    logger.info("✅ Bedrock client initialized for ParserAgent")
+except Exception as e:
+    logger.warning(f"⚠️ Bedrock client init failed: {e}")
 
 # =============================================================================
 # ERROR PATTERNS - For classification
 # =============================================================================
 
 ERROR_PATTERNS = {
+    # Infrastructure / Config errors
+    "config_error": [
+        r"(?i)(Unsupported block type|Unsupported argument|Missing required argument)",
+        r"(?i)(Invalid reference|Reference to undeclared|blocks of type.*not expected)",
+        r"(?i)(Error:.*on.*\.tf|Error:.*terraform)",
+        r"(?i)(Invalid.*configuration|Configuration.*invalid)",
+    ],
     "null_reference": [
         r"(?i)(cannot read propert|undefined is not|null pointer|NoneType|'None' object)",
         r"(?i)(TypeError:.*undefined|TypeError:.*null)",
@@ -82,6 +88,10 @@ LANGUAGE_PATTERNS = {
     "ruby": [r"\.rb:", r"from.*\.rb:\d+:in"],
     "php": [r"\.php:", r"PHP Fatal error:", r"PHP Warning:"],
     "csharp": [r"\.cs:", r"at\s+[\w.]+\s+in\s+.*\.cs:"],
+    "terraform": [r"\.tf:", r"on\s+\w+\.tf\s+line", r"terraform", r"Error:.*terraform", r"aws_", r"resource\s+\""],
+    "cloudformation": [r"\.yaml:", r"\.yml:", r"CloudFormation", r"AWS::"],
+    "dockerfile": [r"Dockerfile", r"docker build", r"FROM\s+\w+"],
+    "bash": [r"\.sh:", r"bash:", r"command not found", r"/bin/bash"],
 }
 
 # =============================================================================
@@ -150,7 +160,7 @@ def extract_stack_frames(error_text: str) -> str:
 def detect_programming_language(error_text: str) -> str:
     """
     Detect the programming language from error message patterns.
-    Uses regex patterns specific to each language's error format.
+    Uses regex patterns first, then LLM fallback for low-confidence cases.
     
     Args:
         error_text: The error message to analyze
@@ -160,6 +170,7 @@ def detect_programming_language(error_text: str) -> str:
     """
     logger.info("🔧 Detecting programming language")
     
+    # First try regex patterns (fast)
     scores = {}
     for language, patterns in LANGUAGE_PATTERNS.items():
         score = 0
@@ -176,6 +187,18 @@ def detect_programming_language(error_text: str) -> str:
         detected = "unknown"
         confidence = 0
     
+    # If low confidence and LLM available, use LLM
+    if confidence < 50 and bedrock_runtime:
+        logger.info("Low confidence, using LLM for language detection")
+        try:
+            llm_result = _detect_language_with_llm(error_text)
+            if llm_result and llm_result.get("confidence", 0) > confidence:
+                detected = llm_result.get("language", detected)
+                confidence = llm_result.get("confidence", confidence)
+                logger.info(f"LLM detected: {detected} ({confidence}%)")
+        except Exception as e:
+            logger.warning(f"LLM detection failed: {e}")
+    
     result = {
         "language": detected,
         "confidence": round(confidence, 1),
@@ -184,6 +207,47 @@ def detect_programming_language(error_text: str) -> str:
     
     logger.info(f"✅ Detected language: {detected} ({confidence}%)")
     return json.dumps(result)
+
+
+def _detect_language_with_llm(error_text: str) -> Dict[str, Any]:
+    """Use LLM to detect programming language when regex is uncertain."""
+    if not bedrock_runtime:
+        return {}
+    
+    prompt = f"""What programming language or tool produced this error? Respond with ONLY JSON.
+
+Error:
+```
+{error_text[:1500]}
+```
+
+Respond ONLY with this JSON format:
+{{"language": "python|javascript|typescript|java|go|rust|ruby|php|terraform|bash|unknown", "confidence": 0-100}}"""
+
+    try:
+        response = bedrock_runtime.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",  # Fast model for quick detection
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 100,
+                "temperature": 0,
+                "messages": [{"role": "user", "content": prompt}]
+            })
+        )
+        
+        response_body = json.loads(response['body'].read())
+        content = response_body.get('content', [{}])[0].get('text', '{}')
+        
+        start = content.find('{')
+        end = content.rfind('}') + 1
+        if start != -1 and end > start:
+            return json.loads(content[start:end])
+    except Exception as e:
+        logger.warning(f"LLM language detection failed: {e}")
+    
+    return {}
 
 
 @tool(name="classify_error_type")

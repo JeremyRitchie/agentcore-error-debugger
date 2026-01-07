@@ -130,6 +130,23 @@ class GatewayTools:
         language_confidence = 0
         
         language_patterns = {
+            "terraform": [
+                (r'on\s+\w+\.tf\s+line\s+\d+', 98),
+                (r'\.tf\s+line\s+\d+', 95),
+                (r'\.tf:\d+', 90),
+                (r'resource\s+"aws_', 85),
+                (r'resource\s+"azurerm_', 85),
+                (r'resource\s+"google_', 85),
+                (r'Unsupported block type', 95),
+                (r'Blocks of type', 90),
+                (r'Unsupported argument', 90),
+                (r'Missing required argument', 85),
+                (r'Error:.*terraform', 80),
+                (r'provider\s+"', 75),
+                (r'module\s+"', 70),
+                (r'variable\s+"', 70),
+                (r'output\s+"', 70),
+            ],
             "python": [
                 (r'Traceback \(most recent call last\)', 95),
                 (r'File ".*\.py"', 90),
@@ -193,6 +210,23 @@ class GatewayTools:
                 (r'at\s+[\w.]+\s+in\s+.*\.cs:line\s+\d+', 95),
                 (r'(NullReferenceException|ArgumentException)', 80),
             ],
+            "yaml": [
+                (r'\.ya?ml:\d+', 85),
+                (r'yaml\.scanner\.ScannerError', 90),
+                (r'mapping values are not allowed', 85),
+            ],
+            "docker": [
+                (r'Dockerfile:\d+', 90),
+                (r'docker build', 75),
+                (r'COPY failed:', 85),
+                (r'RUN.*returned a non-zero code', 80),
+            ],
+            "sql": [
+                (r'SQL syntax', 90),
+                (r'ORA-\d+', 95),
+                (r'ERROR \d+ \(\d+\):', 90),
+                (r'relation ".*" does not exist', 85),
+            ],
         }
         
         for lang, patterns in language_patterns.items():
@@ -204,19 +238,77 @@ class GatewayTools:
                 language_confidence = score
                 language = lang
         
-        # Classify error type
+        # Classify error type with comprehensive patterns
         error_type = "unknown"
         error_lower = error_text.lower()
-        if "undefined" in error_lower or "null" in error_lower or "none" in error_lower:
+        
+        # Terraform/IaC errors
+        if "unsupported block type" in error_lower or "blocks of type" in error_lower:
+            error_type = "config_error"
+            if language == "unknown":
+                language = "terraform"
+        elif "unsupported argument" in error_lower or "an argument named" in error_lower:
+            error_type = "config_error"
+            if language == "unknown":
+                language = "terraform"
+        elif "invalid reference" in error_lower or "resource.*does not exist" in error_lower:
+            error_type = "config_error"
+        elif "missing required argument" in error_lower:
+            error_type = "config_error"
+        
+        # Null/undefined errors
+        elif "undefined" in error_lower or "null" in error_lower or "none" in error_lower:
             error_type = "null_reference"
+        elif "'nonetype' object" in error_lower:
+            error_type = "null_reference"
+        elif "cannot read propert" in error_lower:
+            error_type = "null_reference"
+        
+        # Type errors
         elif "typeerror" in error_lower:
             error_type = "type_error"
-        elif "syntaxerror" in error_lower:
+        elif "is not a function" in error_lower:
+            error_type = "type_error"
+        elif "type mismatch" in error_lower:
+            error_type = "type_error"
+        
+        # Syntax errors
+        elif "syntaxerror" in error_lower or "syntax error" in error_lower:
             error_type = "syntax_error"
-        elif "import" in error_lower or "module" in error_lower:
+        elif "unexpected token" in error_lower:
+            error_type = "syntax_error"
+        elif "parse error" in error_lower:
+            error_type = "syntax_error"
+        
+        # Import/module errors
+        elif "modulenotfounderror" in error_lower or "no module named" in error_lower:
             error_type = "import_error"
-        elif "connection" in error_lower or "timeout" in error_lower:
+        elif "importerror" in error_lower:
+            error_type = "import_error"
+        elif "cannot find module" in error_lower:
+            error_type = "import_error"
+        
+        # Connection errors
+        elif "econnrefused" in error_lower or "connection refused" in error_lower:
             error_type = "connection_error"
+        elif "timeout" in error_lower or "etimedout" in error_lower:
+            error_type = "connection_error"
+        
+        # Permission errors
+        elif "permission denied" in error_lower or "eacces" in error_lower:
+            error_type = "permission_error"
+        elif "access denied" in error_lower or "forbidden" in error_lower:
+            error_type = "permission_error"
+        
+        # Key/Index errors
+        elif "keyerror" in error_lower:
+            error_type = "key_error"
+        elif "indexerror" in error_lower or "index out of" in error_lower:
+            error_type = "index_error"
+        
+        # Validation errors
+        elif "validation" in error_lower and "error" in error_lower:
+            error_type = "validation_error"
         
         return {
             "error_type": error_type,

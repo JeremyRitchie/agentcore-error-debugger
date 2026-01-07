@@ -346,6 +346,50 @@ TypeError: Cannot read properties of undefined (reading 'map')
         </section>
     </div>
 
+    <!-- 
+        AgentCore Configuration
+        
+        DEPLOYMENT: This entire <script id="agentcore-config"> block should be replaced
+        with the actual values from Terraform output "frontend_config".
+        
+        Example deployment script:
+          FRONTEND_CONFIG=$(terraform output -json frontend_config)
+          sed -i "s|window.AGENTCORE_CONFIG = {.*};|window.AGENTCORE_CONFIG = ${FRONTEND_CONFIG};|" index.html
+        
+        LOCAL DEVELOPMENT:
+          - demoMode: true  → UI testing only (no backend calls)
+          - demoMode: false → Requires running backend
+    -->
+    <script id="agentcore-config">
+        window.AGENTCORE_CONFIG = {
+            // ===== REPLACE THESE WITH TERRAFORM OUTPUTS =====
+            
+            // API Endpoints
+            apiEndpoint: null,      // Set to: terraform output -raw gateway_endpoint
+            logsApiEndpoint: null,  // Set to: terraform output -json frontend_config | jq -r .logsApiEndpoint
+            
+            // Mode: false = LIVE (real backend), true = DEMO (UI testing only)
+            // For local UI development without backend, set to true
+            demoMode: true,
+            
+            // AWS Region
+            region: 'us-east-1',
+            
+            // Feature Part (1 = basic, 2 = advanced with memory/stats)
+            part: 2,
+            
+            // CloudWatch Log Groups - MUST match Terraform
+            // Format: /aws/bedrock-agentcore/{project}-{env} for runtime
+            // Format: /aws/lambda/{project}-{env}-{component} for lambdas
+            logGroups: {
+                runtime: '/aws/bedrock-agentcore/error-debugger-prod',
+                parser: '/aws/lambda/error-debugger-prod-parser',
+                security: '/aws/lambda/error-debugger-prod-security',
+                context: '/aws/lambda/error-debugger-prod-context',
+                stats: '/aws/lambda/error-debugger-prod-stats'
+            }
+        };
+    </script>
     <script src="app.js"></script>
 </body>
 </html>

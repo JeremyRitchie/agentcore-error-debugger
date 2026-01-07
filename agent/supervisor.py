@@ -25,11 +25,8 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 # ============================================================================
 # Configuration
 # ============================================================================
-# Feature part (1 = basic, 2 = advanced)
-FEATURE_PART = int(os.environ.get('FEATURE_PART', '2'))
-
-# Demo mode (true = simulated, false = real APIs)
-DEMO_MODE = os.environ.get('DEMO_MODE', 'true').lower() in ('true', '1', 'yes')
+# Import shared config to ensure consistency across all agents
+from agents.config import DEMO_MODE, FEATURE_PART, AWS_REGION
 
 # Gateway Tools - Lambda functions called via Gateway (Parser, Security, Context, Stats)
 from agents import gateway_tools
@@ -168,7 +165,7 @@ def event_loop_tracker(**kwargs):
             "read_github_file_tool": "📄 EXECUTING: Reading file from GitHub repository",
             
             # Root Cause Agent Tools
-            "rootcause_agent_tool": "🎯 EXECUTING: Root Cause Agent (pattern matching, LLM analysis)",
+            "rootcause_agent_tool": "🎯 EXECUTING: Root Cause Agent (LLM reasoning with all context)",
             
             # Fix Agent Tools
             "fix_agent_tool": "🔧 EXECUTING: Fix Agent (code generation, validation)",
@@ -181,6 +178,9 @@ def event_loop_tracker(**kwargs):
             # Stats Operations
             "record_stats": "📊 EXECUTING: Recording error statistics",
             "get_trend": "📈 EXECUTING: Analyzing error trends",
+            
+            # Reflection/Iteration
+            "evaluate_progress": "🤔 REFLECTING: Evaluating progress and deciding next steps",
         }
         description = tool_descriptions.get(tool_name, f"🔧 EXECUTING: {tool_name}")
         logger.info(description)
@@ -298,22 +298,46 @@ def read_github_file_tool(repo_url: str, file_path: str, branch: str = "main") -
 # ============================================================================
 @tool(
     name="rootcause_agent_tool",
-    description="Analyze error root cause using pattern matching against known errors database and Bedrock Claude for reasoning. Returns hypothesis with confidence score."
+    description="""Analyze error root cause using Bedrock Claude LLM for reasoning.
+    
+    IMPORTANT: This should be called LAST, after gathering all context.
+    Pass ALL the context you've collected so the LLM can reason intelligently:
+    - parsed_info: JSON from parser_agent_tool
+    - external_context: JSON from context_agent_tool (GitHub/SO results)
+    - memory_context: JSON from search_memory (similar past errors)
+    
+    The LLM will synthesize all this information to determine the root cause.
+    Returns hypothesis with confidence score."""
 )
-def rootcause_agent_tool(error_text: str, parsed_info: str = "{}") -> str:
-    """Route root cause analysis to the RootCause Agent with pattern/LLM tools."""
-    update_component_status("rootcause", "running", "Analyzing root cause with patterns + LLM...")
+def rootcause_agent_tool(
+    error_text: str, 
+    parsed_info: str = "{}", 
+    external_context: str = "{}",
+    memory_context: str = "{}"
+) -> str:
+    """Route root cause analysis to the RootCause Agent with all gathered context."""
+    update_component_status("rootcause", "running", "LLM reasoning with all gathered context...")
     try:
+        # Parse all the context
         parsed = json.loads(parsed_info) if isinstance(parsed_info, str) else parsed_info
-        result = rootcause_agent.analyze(error_text, parsed)
+        external = json.loads(external_context) if isinstance(external_context, str) else external_context
+        memory = json.loads(memory_context) if isinstance(memory_context, str) else memory_context
+        
+        # Pass all context to the root cause agent
+        result = rootcause_agent.analyze(
+            error_text=error_text, 
+            parsed_info=parsed,
+            external_context=external,
+            memory_context=memory
+        )
+        
         confidence = result.get('confidence', 0)
-        source = result.get('source', 'unknown')
         
         if result.get('error'):
             update_component_status("rootcause", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
         
-        update_component_status("rootcause", "success", f"{confidence}% confidence ({source})")
+        update_component_status("rootcause", "success", f"{confidence}% confidence (LLM reasoning)")
         return json.dumps({"success": True, **result})
     except Exception as e:
         update_component_status("rootcause", "error", error=str(e))
@@ -441,160 +465,290 @@ def get_trend(error_type: str = "", window_days: int = 7) -> str:
 
 
 # ============================================================================
+# REFLECTION TOOL - For iterative reasoning
+# ============================================================================
+@tool(
+    name="evaluate_progress",
+    description="""Evaluate your current progress and decide whether to continue gathering information or produce final output.
+    
+    Call this tool to:
+    1. Summarize what you know so far
+    2. Identify gaps in your knowledge
+    3. Assess your confidence level
+    4. Decide next action
+    
+    This helps you iterate until you have a confident answer."""
+)
+def evaluate_progress(
+    known_language: str = "unknown",
+    known_error_type: str = "unknown",
+    root_cause_hypothesis: str = "",
+    confidence_percent: int = 0,
+    gaps_in_knowledge: str = "",
+    tools_already_used: str = "",
+    proposed_next_action: str = ""
+) -> str:
+    """
+    Reflection tool for the supervisor to evaluate its own progress.
+    This encourages iterative thinking rather than linear execution.
+    """
+    logger.info(f"🤔 Evaluating progress: {confidence_percent}% confidence")
+    
+    # Determine recommendation
+    if confidence_percent >= 80:
+        recommendation = "HIGH_CONFIDENCE: You can produce final output."
+        should_continue = False
+    elif confidence_percent >= 60:
+        recommendation = "MODERATE_CONFIDENCE: Consider gathering one more piece of context, or proceed if time-constrained."
+        should_continue = True
+    elif confidence_percent >= 40:
+        recommendation = "LOW_CONFIDENCE: You should gather more information before concluding."
+        should_continue = True
+    else:
+        recommendation = "VERY_LOW_CONFIDENCE: You need significantly more information. Re-examine your approach."
+        should_continue = True
+    
+    # Suggest next actions based on gaps
+    suggested_actions = []
+    gaps_lower = gaps_in_knowledge.lower()
+    tools_used = tools_already_used.lower()
+    
+    if "language" in gaps_lower and "parser" not in tools_used:
+        suggested_actions.append("Call parser_agent_tool to detect language")
+    if "context" in gaps_lower and "context" not in tools_used:
+        suggested_actions.append("Call context_agent_tool to search external resources")
+    if "root cause" in gaps_lower and "rootcause" not in tools_used:
+        suggested_actions.append("Call rootcause_agent_tool with all gathered context")
+    if "memory" in gaps_lower and "memory" not in tools_used:
+        suggested_actions.append("Call search_memory to find similar past errors")
+    if "file" in gaps_lower or "code" in gaps_lower:
+        suggested_actions.append("Call read_github_file_tool if you have a repo/file reference")
+    
+    if not suggested_actions and should_continue:
+        suggested_actions.append("Try context_agent_tool with different search terms")
+        suggested_actions.append("Re-examine the error for patterns you might have missed")
+    
+    result = {
+        "current_state": {
+            "language": known_language,
+            "error_type": known_error_type,
+            "root_cause_hypothesis": root_cause_hypothesis,
+            "confidence": confidence_percent
+        },
+        "assessment": {
+            "recommendation": recommendation,
+            "should_continue_gathering": should_continue,
+            "gaps_identified": gaps_in_knowledge
+        },
+        "suggested_next_actions": suggested_actions,
+        "your_proposed_action": proposed_next_action
+    }
+    
+    logger.info(f"📊 Evaluation: {recommendation}")
+    return json.dumps(result, indent=2)
+
+
+# ============================================================================
 # Supervisor Agent System Prompt
 # ============================================================================
-SUPERVISOR_PROMPT = """You are an Expert Error Debugging Supervisor managing a team of specialist agents.
+SUPERVISOR_PROMPT = """You are an Expert Error Debugging Supervisor. You are an ITERATIVE, REFLECTIVE agent.
 
-## YOUR ROLE
-You coordinate a multi-agent system to provide comprehensive error debugging and analysis.
-Each specialist agent has unique tools for different aspects of error analysis.
+# YOUR CORE BEHAVIOR
 
-## YOUR SPECIALIST AGENTS AND THEIR TOOLS
+You do NOT just run tools in a linear pipeline and output results.
+You THINK → ACT → OBSERVE → REFLECT → DECIDE whether to continue or output.
 
-### 1. Parser Agent (parser_agent_tool)
-**Tools:** Regex patterns, AST parsing, Comprehend language detection
-- Extracts stack frames, file paths, line numbers
-- Detects programming language
-- Classifies error type
+**You keep iterating until you are CONFIDENT you have the correct answer.**
 
-### 2. Security Agent (security_agent_tool)
-**Tools:** AWS Comprehend PII detection, Regex secret scanning
-- Detects PII (emails, SSNs, phone numbers)
-- Finds hardcoded secrets (API keys, tokens, passwords)
-- Provides redacted version safe for logging
-
-### 3. Context Agent (context_agent_tool)
-**Tools:** GitHub Issues API, Stack Overflow API
-- Searches GitHub for similar issues
-- Finds Stack Overflow Q&A
-- Fetches relevant documentation
-
-### 3b. GitHub File Reader (read_github_file_tool)
-**Tools:** GitHub Raw Content API
-- Reads source code files directly from GitHub repositories
-- Use when stack trace shows a file path and you have a repo URL
-- Provides actual code context to understand what's happening at the error location
-
-### 4. Root Cause Agent (rootcause_agent_tool)
-**Tools:** Known patterns database, Bedrock Claude reasoning
-- Matches against database of known error patterns
-- Uses LLM for deep reasoning when patterns don't match
-- Synthesizes hypothesis with confidence score
-
-### 5. Fix Agent (fix_agent_tool)
-**Tools:** Bedrock Claude code generation, AST syntax validation
-- Generates specific code fixes
-- Validates generated code syntax
-- Suggests prevention measures
-- Creates test cases
-
-### 6. Memory Operations
-**Tools:** AgentCore Memory API (semantic search, storage)
-- search_memory: Find similar past errors
-- store_pattern: Save error solutions for future
-- store_session: Maintain session context
-
-### 7. Stats Operations
-**Tools:** Time-series analysis, frequency calculation
-- record_stats: Track errors analyzed
-- get_trend: Detect error trends
-
-## ANALYSIS WORKFLOW
-
-For comprehensive error debugging:
-
-1. **SEARCH MEMORY FIRST** (search_memory)
-   - Look for similar past errors before analyzing
-   - This provides instant solutions for known issues
-
-2. **PARSE ERROR** (parser_agent_tool)
-   - Extract structure: language, type, stack frames
-   - **IMPORTANT**: Identify file paths and line numbers from stack trace
-   - This feeds into other agents
-
-3. **SECURITY SCAN** (security_agent_tool)
-   - Check for PII and secrets
-   - Ensure safe to store and display
-
-4. **READ SOURCE CODE** (read_github_file_tool) - When repo URL is available
-   - If user provides a GitHub repo URL or the error mentions one
-   - Read the files mentioned in the stack trace
-   - Get actual code context at the error location
-   - This dramatically improves root cause accuracy
-
-5. **GET CONTEXT** (context_agent_tool)
-   - Search GitHub Issues and Stack Overflow
-   - Find community solutions
-
-6. **ANALYZE ROOT CAUSE** (rootcause_agent_tool)
-   - Match known patterns first
-   - Use LLM reasoning for complex cases
-   - **Use the source code context from step 4 for better analysis**
-
-7. **GENERATE FIX** (fix_agent_tool)
-   - Create code fix based on root cause
-   - Validate syntax and suggest tests
-
-8. **UPDATE MEMORY** (store_pattern)
-   - Store new patterns learned
-   - Track statistics
-
-## OUTPUT FORMAT
+## The Loop
 
 ```
-## 🔍 Error Overview
-- **Type**: [error type]
-- **Language**: [language] ([confidence]%)
-- **Security**: [risk level]
+┌─────────────────────────────────────────────────────────────────────┐
+│  1. THINK: What do I know? What do I need to find out?              │
+│  2. ACT: Call a tool to gather information                          │
+│  3. OBSERVE: What did the tool return? Is it useful?                │
+│  4. REFLECT: Do I have enough information? Am I confident?          │
+│  5. DECIDE:                                                          │
+│     - If confident (≥80%) → Produce final output                    │
+│     - If not confident → Loop back to step 1                        │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-## 🧠 Memory Match
-[If similar error found in memory, show previous solution]
+## When to Loop Back
 
-## 📋 Parsed Information
-- **Core Message**: [error message]
-- **Stack Frames**: [count] frames
-- **Classification**: [category]
+Re-run or try different approaches when:
+- Parser returned "unknown" for language → Try inferring from patterns in the error
+- Root cause confidence < 70% → Gather more context, try different search terms
+- External context found 0 results → Try different search queries
+- The fix doesn't seem to address the root cause → Re-analyze
+- You realize you missed something → Go back and get it
 
-## 🔒 Security Assessment
-- **Risk Level**: [low/medium/high/critical]
-- **PII Found**: [count]
-- **Secrets Found**: [count]
-[Recommendations if any]
+## When to Produce Output
 
-## 🎯 Root Cause Analysis
-- **Root Cause**: [explanation]
-- **Confidence**: [percentage]%
-- **Source**: [known_pattern/llm_analysis]
+Only produce final output when:
+- You have identified the language with reasonable confidence
+- You have a root cause hypothesis with ≥70% confidence
+- You have a concrete, actionable fix
+- The fix actually addresses the root cause
 
-## 🔧 Suggested Fix
+# AVAILABLE TOOLS
+
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| `parser_agent_tool` | Extract language, error type, stack trace | ALWAYS first |
+| `security_agent_tool` | Detect PII/secrets | Before storing anything |
+| `search_memory` | Find similar past errors | Early - might have instant solution |
+| `context_agent_tool` | Search GitHub/StackOverflow | After parsing, for external solutions |
+| `read_github_file_tool` | Read source code from repo | When stack trace references a file |
+| `rootcause_agent_tool` | LLM reasoning with all context | After gathering ALL context |
+| `fix_agent_tool` | Generate code fix | After root cause is determined |
+| `record_stats` | Track statistics | At the end |
+| `store_pattern` | Save solution to memory | When confident solution works |
+
+# THINKING PROCESS
+
+Before each action, think out loud:
+
+```
+<thinking>
+What I know so far:
+- Language: [known/unknown]
+- Error type: [known/unknown]
+- Root cause: [hypothesis/unknown]
+- Confidence: [0-100]%
+
+What I need to find out:
+- [list gaps in knowledge]
+
+Next action:
+- [what tool to call and why]
+</thinking>
+```
+
+After each tool result, reflect:
+
+```
+<reflection>
+Tool returned: [summary]
+This tells me: [insight]
+My confidence is now: [0-100]%
+Should I continue gathering info or am I ready to conclude?
+</reflection>
+```
+
+# RECOMMENDED WORKFLOW
+
+## Phase 1: Initial Information Gathering
+
+1. **PARSE** the error to get structured data
+   - If language is "unknown", look at the error patterns yourself
+   - If error_type is "unknown", classify it based on keywords
+
+2. **SECURITY** scan (parallel) - check for PII/secrets
+
+3. **MEMORY** search - check for similar past errors
+   - If high-similarity match found (>0.8), you might be done early!
+
+## Phase 2: External Research (if needed)
+
+4. **CONTEXT** search with good search terms
+   - Use the actual error message, not generic terms
+   - If 0 results, try different search terms
+   - If stack trace mentions a GitHub repo, consider reading the file
+
+## Phase 3: Reasoning (with ALL context)
+
+5. **ROOT CAUSE** analysis
+   - Pass ALL context gathered: parsed info, external findings, memory matches
+   - If confidence < 70%, consider gathering more context
+   - If the root cause seems wrong, question it
+
+## Phase 4: Solution (only when confident)
+
+6. **FIX** generation
+   - Must match the detected language
+   - Must address the identified root cause
+   - If the fix seems generic or wrong, reconsider
+
+7. **RECORD** stats and optionally store pattern for future
+
+# ITERATION EXAMPLES
+
+## Example 1: Low Confidence → Gather More
+```
+<thinking>
+Parser returned language: unknown, error_type: unknown
+Confidence: 20%
+I need more information. Let me look at the error patterns myself.
+The error mentions ".tf line 94" and "resource" - this is Terraform!
+</thinking>
+
+I'll re-interpret: this is a Terraform config_error. Now let me search for context...
+```
+
+## Example 2: Poor Search Results → Retry
+```
+<reflection>
+Context search returned 0 GitHub issues.
+Search term was too generic. Let me try with the specific error message.
+</reflection>
+
+context_agent_tool(error_message="Unsupported block type logging_configuration", ...)
+```
+
+## Example 3: Uncertain Root Cause → Dig Deeper
+```
+<reflection>
+Root cause confidence: 55%
+The analysis says "configuration error" but doesn't explain WHY.
+Let me check if there's a GitHub file I can read for more context.
+</reflection>
+
+read_github_file_tool(repo_url="...", file_path="gateway.tf")
+```
+
+# OUTPUT FORMAT (only when ready)
+
+When you are CONFIDENT (≥70%), produce the final output:
+
+```markdown
+## 🔍 Analysis Complete
+
+**Language**: [language]
+**Error Type**: [error_type]
+**Confidence**: [confidence]%
+
+### 📋 What Happened
+[Clear explanation of the error]
+
+### 🎯 Root Cause  
+[Specific root cause - not generic]
+
+**Why this happened**: [Technical explanation]
+
+### 🔧 Solution
+
 ```[language]
-[fixed code]
-```
-- **Explanation**: [why this fixes it]
-- **Valid Syntax**: [yes/no]
-
-## 📚 External Resources
-- GitHub Issues: [count] related issues
-- Stack Overflow: [count] related questions
-[Top links]
-
-## 🛡️ Prevention
-[Recommendations to prevent this error]
-
-## 📊 Statistics
-- Similar errors in last 30 days: [count]
-- Trend: [increasing/stable/decreasing]
+[Actual code fix]
 ```
 
-## RULES
-- Always search memory first for instant solutions
-- Always parse before analyzing root cause
-- Always check security before storing in memory
-- **If a GitHub repo URL is mentioned or can be inferred, read the relevant source files**
-- **Use file paths from stack traces to read actual code for better context**
-- Store successful solutions in long-term memory
-- Provide specific, actionable code fixes
-- **NEVER say "language unknown" - use your best inference from the error patterns**
+**Explanation**: [Why this fixes it]
+
+### 📚 Resources
+[Real URLs from context search]
+
+### 🛡️ Prevention
+[How to avoid this in the future]
+```
+
+# CRITICAL RULES
+
+1. **ITERATE UNTIL CONFIDENT** - Don't output until you're sure
+2. **THINK OUT LOUD** - Show your reasoning process
+3. **REFLECT ON RESULTS** - Question tool outputs, don't blindly accept
+4. **RE-RUN IF NEEDED** - Low confidence? Gather more info.
+5. **BE SPECIFIC** - Generic answers are useless
+6. **USE REAL DATA** - Only include URLs/info that came from tools
 """
 
 # ============================================================================
@@ -610,6 +764,7 @@ def build_tools_list():
         security_agent_tool,
         rootcause_agent_tool,
         fix_agent_tool,
+        evaluate_progress,  # Reflection tool for iterative reasoning
     ]
     
     # Part 2: Advanced agents and features

@@ -1323,7 +1323,18 @@ async function runAnalysis() {
     els.resultsContent.innerHTML = '<div class="loading">Analyzing error...</div>';
     
     try {
-        const result = await simulateAnalysis(errorText);
+        let result;
+        
+        if (CONFIG.demoMode) {
+            // Demo mode: run local simulation
+            addLogEntry('Running in DEMO mode (local simulation)', 'info');
+            result = await simulateAnalysis(errorText);
+        } else {
+            // Live mode: call real AgentCore backend
+            addLogEntry('Calling AgentCore backend...', 'agent-start');
+            result = await callAgentCoreBackend(errorText);
+        }
+        
         displayResults(result);
         updateMemoryDisplay();
         els.copyBtn.disabled = false;
@@ -1337,7 +1348,10 @@ async function runAnalysis() {
         els.resultsContent.innerHTML = `
             <div class="result-section" style="border-color: var(--accent-red)">
                 <h3>❌ Analysis Failed</h3>
-                <p class="result-text">${error.message}</p>
+                <p class="result-text">${escapeHtml(error.message)}</p>
+                <p class="result-text hint" style="margin-top: 8px; font-size: 0.75rem;">
+                    ${CONFIG.demoMode ? 'Running in demo mode.' : 'Check the CloudWatch logs for more details.'}
+                </p>
             </div>
         `;
     } finally {
@@ -1345,6 +1359,216 @@ async function runAnalysis() {
         els.analyzeBtn.disabled = false;
         els.analyzeBtn.innerHTML = '<span class="icon">⚡</span><span>Debug Error</span>';
     }
+}
+
+// ===== Live Backend Call =====
+
+async function callAgentCoreBackend(errorText) {
+    if (!CONFIG.apiEndpoint || CONFIG.apiEndpoint === '/api') {
+        throw new Error('AgentCore API endpoint not configured. Set window.AGENTCORE_CONFIG.apiEndpoint');
+    }
+    
+    state.startTime = Date.now();
+    state.agentsUsed = 0;
+    state.toolsUsed = 0;
+    
+    // Activate supervisor
+    activateNode('node-runtime');
+    updateAgentStatus('supervisor', 'running');
+    addLogEntry('SUPERVISOR → Orchestrating analysis...', 'agent-start');
+    
+    try {
+        const response = await fetch(CONFIG.apiEndpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                prompt: errorText,
+                session_id: CONFIG.sessionId,
+                mode: 'comprehensive',
+            }),
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`API error ${response.status}: ${errorText}`);
+        }
+        
+        // Handle streaming response
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        
+        let fullResponse = '';
+        let result = {
+            parsed: { language: 'unknown', errorType: 'unknown', languageConfidence: 0, frameCount: 0, coreMessage: '' },
+            security: { riskLevel: 'low', secretsFound: 0, piiFound: 0, safeToStore: true, recommendations: [] },
+            memory: { count: 0, matches: [], hasSolution: false },
+            context: { githubCount: 0, stackoverflowCount: 0, allResources: [], explanation: '', searchUrls: {} },
+            rootCause: { rootCause: '', confidence: 0, solution: '' },
+            fix: { fixType: '', before: '', after: '', explanation: '' },
+            stats: { recorded: true, trend: 'stable' },
+        };
+        
+        if (reader) {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value, { stream: true });
+                fullResponse += chunk;
+                
+                // Parse status updates from the stream
+                const statusMatches = chunk.matchAll(/\[\[STATUS:(.*?)\]\]/g);
+                for (const match of statusMatches) {
+                    try {
+                        const status = JSON.parse(match[1]);
+                        handleStatusUpdate(status);
+                    } catch (e) {
+                        console.warn('Failed to parse status:', match[1]);
+                    }
+                }
+                
+                // Update results panel with streaming content
+                updateStreamingResults(fullResponse);
+            }
+        } else {
+            // Non-streaming response
+            fullResponse = await response.text();
+        }
+        
+        // Parse the final response
+        result = parseAgentResponse(fullResponse, result);
+        
+        // Mark supervisor complete
+        updateAgentStatus('supervisor', 'complete');
+        deactivateNode('node-runtime');
+        
+        return result;
+        
+    } catch (error) {
+        updateAgentStatus('supervisor', 'error');
+        deactivateNode('node-runtime');
+        throw error;
+    }
+}
+
+function handleStatusUpdate(status) {
+    const { component, status: state, message, error } = status;
+    
+    // Map component to agent
+    const agentMap = {
+        parser: 'parser',
+        security: 'security',
+        context: 'context',
+        rootcause: 'rootcause',
+        fix: 'fix',
+        memory: 'memory',
+        stats: 'stats',
+        github_file: 'context',
+    };
+    
+    const agent = agentMap[component];
+    if (!agent) return;
+    
+    if (state === 'running') {
+        updateAgentStatus(agent, 'running');
+        addLogEntry(`${component.toUpperCase()} → ${message || 'Processing...'}`, 'agent-start');
+        window.state?.agentsUsed++;
+    } else if (state === 'success') {
+        updateAgentStatus(agent, 'complete');
+        addLogEntry(`${component.toUpperCase()} ✓ ${message || 'Complete'}`, 'agent-complete');
+        window.state?.toolsUsed++;
+    } else if (state === 'error') {
+        updateAgentStatus(agent, 'error');
+        addLogEntry(`${component.toUpperCase()} ❌ ${error || 'Failed'}`, 'error');
+    }
+    
+    updateStats();
+}
+
+function updateAgentStatus(agent, status) {
+    const statusEl = document.getElementById(`${agent}Status`);
+    const agentEl = document.getElementById(`agent-${agent}`);
+    
+    if (statusEl) {
+        statusEl.textContent = status === 'running' ? 'running' : status === 'complete' ? 'done' : status === 'error' ? 'error' : 'idle';
+        statusEl.className = `agent-status ${status === 'running' ? 'running' : status === 'complete' ? 'complete' : status === 'error' ? 'error' : ''}`;
+    }
+    
+    if (agentEl) {
+        agentEl.classList.remove('active', 'complete', 'error');
+        if (status === 'running') agentEl.classList.add('active');
+        else if (status === 'complete') agentEl.classList.add('complete');
+        else if (status === 'error') agentEl.classList.add('error');
+    }
+}
+
+function updateStreamingResults(content) {
+    // Show streaming markdown content
+    if (els.resultsContent) {
+        // Remove status markers for display
+        const cleanContent = content.replace(/\[\[STATUS:.*?\]\]/g, '');
+        
+        if (cleanContent.trim()) {
+            els.resultsContent.innerHTML = `
+                <div class="result-section streaming fade-in">
+                    <h3>📡 Live Response</h3>
+                    <pre class="streaming-content">${escapeHtml(cleanContent)}</pre>
+                </div>
+            `;
+        }
+    }
+}
+
+function parseAgentResponse(responseText, defaultResult) {
+    // Remove status markers
+    const cleanResponse = responseText.replace(/\[\[STATUS:.*?\]\]/g, '');
+    
+    // Try to extract structured data from the response
+    const result = { ...defaultResult };
+    
+    // Extract language
+    const langMatch = cleanResponse.match(/\*\*Language\*\*:\s*(\w+)/i) || 
+                      cleanResponse.match(/Language:\s*(\w+)/i);
+    if (langMatch) {
+        result.parsed.language = langMatch[1].toLowerCase();
+        result.parsed.languageConfidence = 85;
+    }
+    
+    // Extract error type
+    const typeMatch = cleanResponse.match(/\*\*Error Type\*\*:\s*(\w+)/i) ||
+                      cleanResponse.match(/Error Type:\s*(\w+)/i) ||
+                      cleanResponse.match(/\*\*Type\*\*:\s*(\w+)/i);
+    if (typeMatch) {
+        result.parsed.errorType = typeMatch[1].toLowerCase();
+    }
+    
+    // Extract confidence
+    const confMatch = cleanResponse.match(/\*\*Confidence\*\*:\s*(\d+)/i) ||
+                      cleanResponse.match(/Confidence:\s*(\d+)/i);
+    if (confMatch) {
+        result.rootCause.confidence = parseInt(confMatch[1]);
+    }
+    
+    // Extract root cause
+    const rootCauseMatch = cleanResponse.match(/### 🎯 Root Cause\s*\n([\s\S]*?)(?=\n###|\n##|$)/i) ||
+                           cleanResponse.match(/\*\*Root Cause\*\*:\s*([^\n]+)/i);
+    if (rootCauseMatch) {
+        result.rootCause.rootCause = rootCauseMatch[1].trim();
+    }
+    
+    // Extract fix code
+    const fixMatch = cleanResponse.match(/```(\w+)?\n([\s\S]*?)```/);
+    if (fixMatch) {
+        result.fix.after = fixMatch[2].trim();
+        result.fix.fixType = 'code_fix';
+    }
+    
+    // Store the raw response for display
+    result.rawResponse = cleanResponse;
+    
+    return result;
 }
 
 // ===== Utilities =====

@@ -1,458 +1,252 @@
 """
-Root Cause Agent - Analyzes errors to determine root cause
-Tools: Bedrock Claude for reasoning, pattern matching
+Root Cause Agent - The reasoning brain of the error debugger
 
-Uses Bedrock Claude in live mode, pattern matching fallback in demo mode.
+This agent's job is to THINK about the error using an LLM.
+It synthesizes information from:
+- Parser (language, error type, stack trace)
+- Context (GitHub issues, Stack Overflow answers)
+- Memory (previous similar errors)
+
+The LLM is the PRIMARY reasoner, not a fallback.
+Pattern matching is just a quick lookup for well-known errors.
 """
-import re
 import json
 import logging
 import boto3
-from typing import Dict, Any, List
+from typing import Dict, Any, Optional
 from strands import Agent, tool
 
 from .config import DEMO_MODE, AWS_REGION
 
 logger = logging.getLogger(__name__)
 
-# Initialize Bedrock client (only in live mode)
+# Initialize Bedrock client
 bedrock_runtime = None
-if not DEMO_MODE:
-    try:
-        bedrock_runtime = boto3.client('bedrock-runtime', region_name=AWS_REGION)
-        logger.info("✅ Bedrock runtime client initialized")
-    except Exception as e:
-        logger.warning(f"⚠️ Bedrock client init failed: {e}")
+try:
+    bedrock_runtime = boto3.client('bedrock-runtime', region_name=AWS_REGION)
+    logger.info("✅ Bedrock runtime client initialized for RootCauseAgent")
+except Exception as e:
+    logger.warning(f"⚠️ Bedrock client init failed: {e}")
+
 
 # =============================================================================
-# KNOWN PATTERNS DATABASE
+# QUICK LOOKUP - Known patterns (optional speed optimization, not the brain)
 # =============================================================================
 
-KNOWN_PATTERNS = {
-    "react_undefined_map": {
-        "pattern": r"Cannot read propert.*'map'.*of undefined",
-        "root_cause": "Array data is undefined when .map() is called, likely because async data hasn't loaded yet",
-        "solution": "Add null check: data?.map() or data && data.map(), or initialize with empty array",
-        "category": "async_data_race"
-    },
-    "python_none_attribute": {
-        "pattern": r"'NoneType' object has no attribute",
-        "root_cause": "Function returned None when object was expected, or variable was not properly initialized",
-        "solution": "Check if function returns None on error. Add 'if variable is not None' check before use",
-        "category": "null_reference"
-    },
-    "node_require_not_found": {
-        "pattern": r"Cannot find module|MODULE_NOT_FOUND",
-        "root_cause": "Node.js cannot locate the required module in node_modules or the specified path",
-        "solution": "Run 'npm install' to install dependencies, or check import path spelling",
-        "category": "import_error"
-    },
-    "python_import_circular": {
-        "pattern": r"ImportError.*partially initialized module.*circular import",
-        "root_cause": "Two modules import each other, creating a dependency cycle",
-        "solution": "Move shared code to third module, or use lazy imports (import inside function)",
-        "category": "circular_import"
-    },
-    "cors_error": {
-        "pattern": r"CORS|Access-Control-Allow-Origin|blocked by CORS policy",
-        "root_cause": "Server doesn't include CORS headers, blocking cross-origin requests from browser",
-        "solution": "Configure server to send Access-Control-Allow-Origin header, or use a proxy",
-        "category": "cors"
-    },
-    "connection_refused": {
-        "pattern": r"ECONNREFUSED|Connection refused|connect ECONNREFUSED",
-        "root_cause": "Target service is not running or not accepting connections on the specified port",
-        "solution": "Verify service is running. Check port number. Check firewall rules.",
-        "category": "connection_error"
-    },
-    "permission_denied_file": {
-        "pattern": r"EACCES|Permission denied.*open|PermissionError.*open",
-        "root_cause": "Process lacks read/write permission for the file or directory",
-        "solution": "Check file permissions with ls -la. Change ownership or permissions with chmod/chown",
-        "category": "permission_error"
-    },
-    "async_await_missing": {
-        "pattern": r"\[object Promise\]|Promise.*pending|is not a function.*then",
-        "root_cause": "Async function result used without await, resulting in Promise object instead of value",
-        "solution": "Add 'await' before the async function call, or use .then() to handle the Promise",
-        "category": "async_error"
-    },
-    "json_parse_error": {
-        "pattern": r"JSON\.parse|Unexpected token.*JSON|SyntaxError.*JSON",
-        "root_cause": "Attempting to parse invalid JSON string, often from API response",
-        "solution": "Validate JSON format. Check API response content-type. Log raw response before parsing.",
-        "category": "parse_error"
-    },
-    "database_connection": {
-        "pattern": r"ETIMEDOUT.*sql|ER_ACCESS_DENIED|connection.*timeout.*database",
-        "root_cause": "Database connection failed due to timeout, wrong credentials, or network issues",
-        "solution": "Verify database host, port, credentials. Check network connectivity. Increase timeout.",
-        "category": "database_error"
-    },
+QUICK_SOLUTIONS = {
+    # These are FAST lookups for well-documented errors
+    # They supplement LLM reasoning, they don't replace it
+    
+    "cannot read property": "Null/undefined access - use optional chaining (?.) or add null check",
+    "'nonetype' object has no attribute": "Function returned None - check return values and add None handling",
+    "no module named": "Module not installed - run 'pip install <module>' and activate virtual environment",
+    "cannot find module": "Package not installed - run 'npm install' and check import path",
+    "econnrefused": "Service not running - start the target service and verify host/port",
+    "unsupported block type": "Terraform block not supported - check provider docs for valid blocks",
 }
 
+
+def get_quick_solution(error_text: str) -> Optional[str]:
+    """Fast lookup for well-known errors. Returns None if no quick match."""
+    error_lower = error_text.lower()
+    for pattern, solution in QUICK_SOLUTIONS.items():
+        if pattern in error_lower:
+            return solution
+    return None
+
+
 # =============================================================================
-# TOOLS - Root cause analysis
+# TOOLS - Available for the agent
 # =============================================================================
 
-@tool(name="match_known_patterns")
-def match_known_patterns(error_text: str) -> str:
+@tool(name="reason_about_error")
+def reason_about_error(
+    error_text: str,
+    language: str = "unknown",
+    error_type: str = "unknown",
+    stack_trace: str = "",
+    external_context: str = "",
+    memory_context: str = ""
+) -> str:
     """
-    Match error against database of known error patterns.
-    Uses regex patterns to identify well-documented issues.
+    Use Bedrock Claude to reason about the error and determine root cause.
+    This is the PRIMARY analysis method - uses LLM intelligence.
     
     Args:
-        error_text: The error message to analyze
+        error_text: The full error message
+        language: Detected programming language
+        error_type: Classified error type
+        stack_trace: Extracted stack trace frames
+        external_context: Relevant GitHub/SO findings
+        memory_context: Similar past errors from memory
     
     Returns:
-        JSON with matched patterns and known solutions
+        JSON with reasoning-based root cause analysis
     """
-    logger.info(f"🔍 Matching against {len(KNOWN_PATTERNS)} known patterns")
+    logger.info("🧠 Using LLM to reason about error")
     
-    matches = []
-    
-    for pattern_id, pattern_info in KNOWN_PATTERNS.items():
-        if re.search(pattern_info["pattern"], error_text, re.IGNORECASE):
-            matches.append({
-                "pattern_id": pattern_id,
-                "root_cause": pattern_info["root_cause"],
-                "solution": pattern_info["solution"],
-                "category": pattern_info["category"],
-                "confidence": 90  # High confidence for pattern matches
-            })
-    
-    result = {
-        "matched_count": len(matches),
-        "matches": matches,
-        "has_known_solution": len(matches) > 0
-    }
-    
-    logger.info(f"✅ Found {len(matches)} pattern matches")
-    return json.dumps(result)
+    # Build the analysis prompt
+    prompt = f"""You are an expert software debugger. Analyze this error and determine the root cause.
 
-
-@tool(name="analyze_with_llm")
-def analyze_with_llm(error_text: str, context: str = "") -> str:
-    """
-    Use Bedrock Claude to analyze the error and hypothesize root cause.
-    Provides reasoning-based analysis for errors without known patterns.
-    
-    Args:
-        error_text: The error message
-        context: Additional context (parsed info, stack frames)
-    
-    Returns:
-        JSON with LLM analysis and hypotheses
-    """
-    logger.info("🧠 Analyzing with Bedrock Claude")
-    
-    prompt = f"""Analyze this error and provide a root cause hypothesis.
-
-Error:
+## ERROR
+```
 {error_text}
+```
 
-{f"Additional Context: {context}" if context else ""}
+## CONTEXT
+- Language: {language}
+- Error Type: {error_type}
+{f"- Stack Trace: {stack_trace}" if stack_trace else ""}
+{f"- External Context (from GitHub/StackOverflow): {external_context}" if external_context else ""}
+{f"- Similar Past Errors: {memory_context}" if memory_context else ""}
 
-Respond with a JSON object containing:
+## YOUR TASK
+1. Determine the ROOT CAUSE - what specifically went wrong
+2. Explain WHY it happened - the underlying mechanism
+3. Provide the SOLUTION - actionable steps to fix it
+4. Rate your CONFIDENCE (0-100)
+
+## RESPONSE FORMAT
+Respond with ONLY this JSON, no other text:
 {{
-    "root_cause": "Brief explanation of what caused this error",
-    "explanation": "Detailed technical explanation",
-    "confidence": 0-100,
-    "likely_location": "Where in code this error originates",
-    "contributing_factors": ["factor1", "factor2"]
+    "root_cause": "One clear sentence explaining what caused this error",
+    "explanation": "2-3 sentences explaining the underlying mechanism and why this happened",
+    "solution": "Numbered list of specific steps to fix this",
+    "confidence": 85,
+    "category": "null_reference|import_error|config_error|type_error|connection_error|syntax_error|permission_error|async_error|other"
 }}"""
 
-    if bedrock_runtime:
-        try:
-            response = bedrock_runtime.invoke_model(
-                modelId="anthropic.claude-3-sonnet-20240229-v1:0",
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps({
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 1024,
-                    "messages": [{"role": "user", "content": prompt}]
-                })
-            )
-            
-            response_body = json.loads(response['body'].read())
-            content = response_body.get('content', [{}])[0].get('text', '{}')
-            
-            # Try to extract JSON from response
-            try:
-                start = content.find('{')
-                end = content.rfind('}') + 1
-                if start != -1 and end > start:
-                    return content[start:end]
-            except:
-                pass
-                
-        except Exception as e:
-            logger.warning(f"Bedrock call failed: {str(e)}, using fallback")
-    
-    # Fallback analysis
-    return json.dumps(_fallback_analysis(error_text))
-
-
-def _fallback_analysis(error_text: str) -> Dict[str, Any]:
-    """Fallback root cause analysis without LLM - comprehensive pattern matching."""
-    error_lower = error_text.lower()
-    
-    # Check for specific error patterns with detailed analysis
-    
-    # Null/Undefined errors
-    if "cannot read propert" in error_lower and "undefined" in error_lower:
-        return {
-            "root_cause": "Accessing property on undefined object - likely async data not loaded",
-            "explanation": "Code is trying to access a property (like .map, .length, etc.) on an undefined value. This commonly happens when: 1) API data hasn't loaded yet, 2) Object path is wrong, 3) Optional chaining not used.",
-            "confidence": 85,
-            "likely_location": "The line accessing the property - check the stack trace for the exact location",
-            "contributing_factors": ["Missing null/undefined check", "Async race condition", "Wrong object path", "API returned null"]
-        }
-    elif "'nonetype' object has no attribute" in error_lower:
-        return {
-            "root_cause": "Method called on None in Python - function returned None unexpectedly",
-            "explanation": "A function returned None instead of an expected object, and then code tried to call a method or access an attribute on that None value.",
-            "confidence": 85,
-            "likely_location": "Check what function returned None - look one level up in the call stack",
-            "contributing_factors": ["Function missing return statement", "Error case returning None", "Failed API/DB call"]
-        }
-    elif "undefined" in error_lower or "null" in error_lower or "none" in error_lower:
-        return {
-            "root_cause": "Null or undefined value accessed",
-            "explanation": "A variable or property is null/undefined when accessed. This commonly occurs with async data, optional values, or uninitialized variables.",
-            "confidence": 75,
-            "likely_location": "Property access or method call site",
-            "contributing_factors": ["Missing null check", "Async timing issue", "Uninitialized variable"]
-        }
-    
-    # Import/Module errors
-    elif "no module named" in error_lower or "modulenotfounderror" in error_lower:
-        return {
-            "root_cause": "Python module not installed or not in path",
-            "explanation": "Python cannot find the specified module. Either it's not installed, or it's not in the Python path.",
-            "confidence": 90,
-            "likely_location": "The import statement at the top of the file",
-            "contributing_factors": ["Run 'pip install <module>'", "Activate virtual environment", "Check spelling of module name", "Check __init__.py exists for local modules"]
-        }
-    elif "cannot find module" in error_lower or "module_not_found" in error_lower:
-        return {
-            "root_cause": "Node.js module not found",
-            "explanation": "Node.js cannot locate the required module in node_modules or the specified path.",
-            "confidence": 90,
-            "likely_location": "The require() or import statement",
-            "contributing_factors": ["Run 'npm install'", "Check package.json", "Verify import path spelling", "Check if package exists"]
-        }
-    elif "import" in error_lower or "module" in error_lower:
-        return {
-            "root_cause": "Module import failure",
-            "explanation": "The application cannot find or load a required module.",
-            "confidence": 75,
-            "likely_location": "Import statement at top of file",
-            "contributing_factors": ["Missing dependency installation", "Wrong import path", "Circular import"]
-        }
-    
-    # Type errors
-    elif "is not a function" in error_lower:
-        return {
-            "root_cause": "Calling something that isn't a function",
-            "explanation": "Code tried to call something as a function, but it's actually undefined, null, or a different type. Common when: 1) Method name is misspelled, 2) Object doesn't have that method, 3) Import is wrong.",
-            "confidence": 85,
-            "likely_location": "The function call site in the stack trace",
-            "contributing_factors": ["Check method name spelling", "Verify object has the method", "Check import statement"]
-        }
-    elif "typeerror" in error_lower:
-        return {
-            "root_cause": "Type mismatch - operation on wrong type",
-            "explanation": "An operation was performed on a value of unexpected type.",
-            "confidence": 70,
-            "likely_location": "Function call or operation site",
-            "contributing_factors": ["Wrong argument type", "Unexpected data format", "Missing type conversion"]
-        }
-    
-    # Syntax errors
-    elif "syntaxerror" in error_lower or "unexpected token" in error_lower:
-        return {
-            "root_cause": "Code syntax is invalid",
-            "explanation": "The code has a syntax error that prevents it from being parsed. This is usually a missing bracket, quote, or typo.",
-            "confidence": 90,
-            "likely_location": "The exact line/column mentioned in the error",
-            "contributing_factors": ["Missing closing bracket/brace/paren", "Unclosed string", "Typo in keyword", "Invalid character"]
-        }
-    
-    # Connection errors
-    elif "econnrefused" in error_lower or "connection refused" in error_lower:
-        return {
-            "root_cause": "Target service not running or not accepting connections",
-            "explanation": "The code tried to connect to a server/service that refused the connection. The target is either not running or blocking the connection.",
-            "confidence": 90,
-            "likely_location": "Network/API call in the code",
-            "contributing_factors": ["Start the target service", "Check host/port is correct", "Check firewall rules", "Verify network connectivity"]
-        }
-    elif "timeout" in error_lower or "etimedout" in error_lower:
-        return {
-            "root_cause": "Network operation timed out",
-            "explanation": "A network request took too long and was terminated. The server might be slow, unreachable, or overloaded.",
-            "confidence": 85,
-            "likely_location": "Network/API call in the code",
-            "contributing_factors": ["Increase timeout value", "Check server health", "Check network connectivity", "Implement retry logic"]
-        }
-    
-    # Permission errors
-    elif "permission denied" in error_lower or "eacces" in error_lower:
-        return {
-            "root_cause": "Insufficient permissions for file/resource access",
-            "explanation": "The process doesn't have permission to access the file, directory, or resource.",
-            "confidence": 90,
-            "likely_location": "File or resource access in the code",
-            "contributing_factors": ["Check file permissions (ls -la)", "Run with appropriate user", "chmod/chown the file", "Check SELinux/AppArmor"]
-        }
-    
-    # Key/Index errors
-    elif "keyerror" in error_lower:
-        return {
-            "root_cause": "Dictionary key doesn't exist",
-            "explanation": "Code tried to access a dictionary key that doesn't exist. The key name shown in the error is not in the dictionary.",
-            "confidence": 90,
-            "likely_location": "Dictionary access in the code",
-            "contributing_factors": ["Use dict.get(key, default)", "Check key exists first", "Verify data structure", "Check for typos in key name"]
-        }
-    elif "indexerror" in error_lower or "index out of" in error_lower:
-        return {
-            "root_cause": "Array/list index out of bounds",
-            "explanation": "Code tried to access an array/list index that doesn't exist. The list is shorter than expected.",
-            "confidence": 90,
-            "likely_location": "Array/list access in the code",
-            "contributing_factors": ["Check array length before access", "Verify data is populated", "Use safe access patterns", "Check loop bounds"]
-        }
-    
-    # Async errors
-    elif "[object promise]" in error_lower or "promise" in error_lower and "pending" in error_lower:
-        return {
-            "root_cause": "Missing await on async function",
-            "explanation": "An async function was called without 'await', so the code received a Promise object instead of the actual value.",
-            "confidence": 85,
-            "likely_location": "Async function call site",
-            "contributing_factors": ["Add 'await' before the async call", "Use .then() to handle Promise", "Make parent function async"]
-        }
-    
-    # Default fallback with better guidance
-    else:
-        return {
-            "root_cause": "Error requires source code analysis for precise diagnosis",
-            "explanation": "The error pattern doesn't match common templates. To provide accurate root cause analysis: 1) Check the stack trace for the exact file and line, 2) Review the code at that location, 3) Look at recent changes to that area.",
-            "confidence": 40,
-            "likely_location": "Check the stack trace - first file that's YOUR code (not library code)",
-            "contributing_factors": [
-                "Review the stack trace for exact location",
-                "Check recent git commits to affected files", 
-                "Add logging around the error location",
-                "Verify input data is as expected"
-            ]
-        }
-
-
-@tool(name="synthesize_hypothesis")
-def synthesize_hypothesis(parsed_info: str, pattern_matches: str, llm_analysis: str) -> str:
-    """
-    Synthesize a final root cause hypothesis from multiple sources.
-    Combines pattern matching and LLM analysis for best result.
-    
-    Args:
-        parsed_info: JSON from parser agent
-        pattern_matches: JSON from pattern matching
-        llm_analysis: JSON from LLM analysis
-    
-    Returns:
-        JSON with synthesized hypothesis
-    """
-    logger.info("🎯 Synthesizing root cause hypothesis")
+    if not bedrock_runtime:
+        logger.warning("Bedrock client not available")
+        return json.dumps({
+            "root_cause": "Unable to analyze - LLM not available",
+            "explanation": "The Bedrock LLM service is not configured. Please check AWS credentials and region.",
+            "solution": "1. Verify AWS credentials are configured\n2. Check Bedrock access is enabled\n3. Verify the region supports Bedrock",
+            "confidence": 0,
+            "category": "other",
+            "error": "bedrock_not_available"
+        })
     
     try:
-        parsed = json.loads(parsed_info) if isinstance(parsed_info, str) else parsed_info
-        patterns = json.loads(pattern_matches) if isinstance(pattern_matches, str) else pattern_matches
-        llm = json.loads(llm_analysis) if isinstance(llm_analysis, str) else llm_analysis
-    except json.JSONDecodeError:
-        parsed, patterns, llm = {}, {}, {}
-    
-    # Prioritize pattern matches (highest confidence)
-    if patterns.get("matches"):
-        best_match = patterns["matches"][0]
-        hypothesis = {
-            "root_cause": best_match["root_cause"],
-            "solution": best_match["solution"],
-            "confidence": best_match["confidence"],
-            "source": "known_pattern",
-            "pattern_id": best_match["pattern_id"],
-            "category": best_match.get("category", "unknown"),
-            "additional_insights": llm.get("contributing_factors", [])
-        }
-    else:
-        # Fall back to LLM analysis
-        hypothesis = {
-            "root_cause": llm.get("root_cause", "Unable to determine"),
-            "solution": _generate_solution_from_llm(llm),
-            "confidence": llm.get("confidence", 50),
-            "source": "llm_analysis",
-            "category": parsed.get("error_type", "unknown"),
-            "additional_insights": llm.get("contributing_factors", [])
-        }
-    
-    # Add parsed context
-    hypothesis["error_type"] = parsed.get("error_type", "unknown")
-    hypothesis["language"] = parsed.get("language", "unknown")
-    
-    logger.info(f"✅ Hypothesis: {hypothesis['root_cause'][:50]}...")
-    return json.dumps(hypothesis)
+        response = bedrock_runtime.invoke_model(
+            modelId="anthropic.claude-3-sonnet-20240229-v1:0",
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 1500,
+                "temperature": 0.2,  # Lower temperature for more precise analysis
+                "messages": [{"role": "user", "content": prompt}]
+            })
+        )
+        
+        response_body = json.loads(response['body'].read())
+        content = response_body.get('content', [{}])[0].get('text', '')
+        
+        logger.info(f"🧠 LLM response received ({len(content)} chars)")
+        
+        # Extract JSON from response
+        try:
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            if start != -1 and end > start:
+                result = json.loads(content[start:end])
+                logger.info(f"✅ LLM analysis complete: {result.get('confidence', 0)}% confidence")
+                return json.dumps(result)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse LLM JSON: {e}")
+            # Return the raw content if JSON parsing fails
+            return json.dumps({
+                "root_cause": content[:200] if content else "LLM response parsing failed",
+                "explanation": content,
+                "solution": "Review the LLM response above for insights",
+                "confidence": 30,
+                "category": "other"
+            })
+            
+    except Exception as e:
+        logger.error(f"❌ Bedrock call failed: {str(e)}")
+        return json.dumps({
+            "root_cause": f"LLM analysis failed: {str(e)}",
+            "explanation": "The Bedrock LLM call failed. This could be due to throttling, permissions, or service issues.",
+            "solution": "1. Check CloudWatch logs for details\n2. Verify IAM permissions\n3. Try again in a moment",
+            "confidence": 0,
+            "category": "other",
+            "error": str(e)
+        })
 
 
-def _generate_solution_from_llm(llm: Dict) -> str:
-    """Generate solution suggestion from LLM analysis."""
-    factors = llm.get("contributing_factors", [])
+@tool(name="check_known_solutions")
+def check_known_solutions(error_text: str) -> str:
+    """
+    Quick lookup in known solutions database.
+    This is a FAST supplementary check, not the primary analysis.
     
-    if factors:
-        return f"Address these factors: {', '.join(factors)}"
+    Args:
+        error_text: The error message to check
     
-    return f"Investigate: {llm.get('likely_location', 'the error location')}"
+    Returns:
+        JSON with known solution if found, empty if not
+    """
+    logger.info("🔍 Checking known solutions database")
+    
+    quick = get_quick_solution(error_text)
+    
+    if quick:
+        logger.info(f"✅ Found known solution: {quick[:50]}...")
+        return json.dumps({
+            "found": True,
+            "quick_solution": quick,
+            "note": "This is a well-known error pattern. The LLM analysis may provide more detailed context."
+        })
+    
+    logger.info("No known solution match")
+    return json.dumps({
+        "found": False,
+        "note": "No quick match found. Use LLM analysis for detailed reasoning."
+    })
 
 
 # =============================================================================
-# AGENT - Strands Agent with analysis tools
+# AGENT - The reasoning brain
 # =============================================================================
 
-ROOTCAUSE_AGENT_PROMPT = """You are a Root Cause Analysis Specialist Agent.
+ROOTCAUSE_AGENT_PROMPT = """You are the Root Cause Analysis Brain.
 
-## YOUR ROLE
-Determine the root cause of errors by combining pattern matching and reasoning.
-Provide actionable diagnosis for debugging.
+## YOUR PURPOSE
+You THINK about errors using intelligence, not just pattern matching.
+Your job is to REASON about why an error occurred and how to fix it.
 
-## YOUR TOOLS
-- match_known_patterns: Match against database of known error patterns (fast, high confidence)
-- analyze_with_llm: Use Bedrock Claude for deeper reasoning (thorough, moderate confidence)
-- synthesize_hypothesis: Combine findings into final hypothesis
+## YOUR APPROACH
+1. First, check_known_solutions for a quick answer (optional speed optimization)
+2. Always use reason_about_error to deeply analyze the error
+3. Combine quick solutions with deep analysis for the best answer
 
-## YOUR WORKFLOW
-1. Call match_known_patterns to check for recognized errors
-2. If no pattern match, call analyze_with_llm for reasoning
-3. Call synthesize_hypothesis to combine all findings
+## WHAT YOU RECEIVE
+- The error message (always)
+- Parsed info: language, error type (from Parser agent)
+- External context: GitHub issues, Stack Overflow answers (from Context agent)
+- Memory context: Similar past errors (from Memory agent)
 
-## OUTPUT FORMAT
-Return a JSON object with:
+## WHAT YOU PRODUCE
+A JSON object with:
 {
-    "root_cause": "Clear explanation of what caused the error",
-    "solution": "Actionable steps to fix the issue",
+    "root_cause": "Clear, specific explanation of what went wrong",
+    "explanation": "Why this happened - the underlying mechanism",
+    "solution": "Actionable steps to fix it",
     "confidence": 0-100,
-    "category": "error category",
-    "source": "known_pattern|llm_analysis",
-    "additional_insights": ["insight1", "insight2"]
+    "category": "error category"
 }
 
-Always return valid JSON only, no additional text.
+## IMPORTANT
+- Be SPECIFIC, not generic. "Null pointer" is bad. "user.profile is undefined because the API returns null for deleted users" is good.
+- Your solution should be ACTIONABLE. Not "fix the bug" but "add optional chaining: user?.profile?.name"
+- Use the context provided to give INTELLIGENT analysis, not template responses.
 """
 
 rootcause_agent = Agent(
     system_prompt=ROOTCAUSE_AGENT_PROMPT,
-    tools=[match_known_patterns, analyze_with_llm, synthesize_hypothesis],
+    tools=[reason_about_error, check_known_solutions],
 )
 
 
@@ -460,68 +254,117 @@ rootcause_agent = Agent(
 # INTERFACE - For supervisor to call
 # =============================================================================
 
-def analyze(error_text: str, parsed_info: Dict = None) -> Dict[str, Any]:
+def analyze(
+    error_text: str,
+    parsed_info: Dict = None,
+    external_context: Dict = None,
+    memory_context: Dict = None
+) -> Dict[str, Any]:
     """
-    Analyze root cause of an error.
+    Analyze root cause of an error using LLM reasoning.
+    
+    This is the main entry point for the root cause agent.
+    It uses the LLM to THINK about the error, not just pattern match.
     
     Args:
-        error_text: The error message
-        parsed_info: Optional parsed info from parser agent
+        error_text: The full error message
+        parsed_info: Output from parser agent (language, error_type, etc.)
+        external_context: Output from context agent (GitHub, SO findings)
+        memory_context: Output from memory agent (past similar errors)
         
     Returns:
-        Dict with root cause analysis
+        Dict with intelligent root cause analysis
     """
-    logger.info(f"🔎 RootCauseAgent: Analyzing error")
+    logger.info("🔎 RootCauseAgent: Starting intelligent analysis")
+    
+    # Extract context for the LLM
+    parsed = parsed_info or {}
+    language = parsed.get('language', 'unknown')
+    error_type = parsed.get('error_type', 'unknown')
+    stack_trace = parsed.get('stack_trace', '')
+    
+    # Format external context
+    ext_ctx = ""
+    if external_context:
+        github = external_context.get('github_results', [])
+        so = external_context.get('stackoverflow_results', [])
+        if github:
+            ext_ctx += f"GitHub issues: {json.dumps(github[:3])}\n"
+        if so:
+            ext_ctx += f"StackOverflow: {json.dumps(so[:3])}\n"
+    
+    # Format memory context
+    mem_ctx = ""
+    if memory_context:
+        matches = memory_context.get('matches', [])
+        if matches:
+            mem_ctx = f"Similar past errors: {json.dumps(matches[:3])}"
     
     try:
-        context = json.dumps(parsed_info) if parsed_info else ""
-        
-        prompt = f"""Analyze the root cause of this error:
+        # Build the analysis request
+        prompt = f"""Analyze this error:
 
 Error: {error_text}
 
-{f"Parsed context: {context}" if context else ""}
+Available context:
+- Language: {language}
+- Error Type: {error_type}
+{f"- Stack Trace: {stack_trace}" if stack_trace else ""}
+{f"- External findings: {ext_ctx}" if ext_ctx else ""}
+{f"- Past similar errors: {mem_ctx}" if mem_ctx else ""}
 
-Use pattern matching first, then LLM analysis if needed. Synthesize a hypothesis."""
-        
+Use reason_about_error to provide intelligent analysis."""
+
+        # Run the agent
         result = rootcause_agent(prompt)
         response_text = str(result)
         
+        # Extract JSON from response
         try:
             start = response_text.find('{')
             end = response_text.rfind('}') + 1
             if start != -1 and end > start:
-                parsed = json.loads(response_text[start:end])
-                logger.info(f"✅ RootCauseAgent complete: {parsed.get('confidence', 0)}% confidence")
-                return parsed
+                parsed_result = json.loads(response_text[start:end])
+                logger.info(f"✅ RootCauseAgent complete: {parsed_result.get('confidence', 0)}% confidence")
+                return parsed_result
         except json.JSONDecodeError:
             pass
         
-        return _direct_analyze(error_text, parsed_info)
+        # If agent response isn't JSON, call the tool directly
+        logger.info("Agent response not JSON, calling tool directly")
+        return _direct_analyze(error_text, language, error_type, stack_trace, ext_ctx, mem_ctx)
         
     except Exception as e:
         logger.error(f"❌ RootCauseAgent error: {str(e)}")
-        return _direct_analyze(error_text, parsed_info)
+        return _direct_analyze(error_text, language, error_type, stack_trace, ext_ctx, mem_ctx)
 
 
-def _direct_analyze(error_text: str, parsed_info: Dict = None) -> Dict[str, Any]:
-    """Direct analysis fallback."""
+def _direct_analyze(
+    error_text: str,
+    language: str = "unknown",
+    error_type: str = "unknown",
+    stack_trace: str = "",
+    external_context: str = "",
+    memory_context: str = ""
+) -> Dict[str, Any]:
+    """Direct tool call when agent wrapper fails."""
     try:
-        patterns = json.loads(match_known_patterns(error_text))
-        llm = json.loads(analyze_with_llm(error_text))
-        
-        parsed_json = json.dumps(parsed_info or {})
-        patterns_json = json.dumps(patterns)
-        llm_json = json.dumps(llm)
-        
-        return json.loads(synthesize_hypothesis(parsed_json, patterns_json, llm_json))
+        result = reason_about_error(
+            error_text=error_text,
+            language=language,
+            error_type=error_type,
+            stack_trace=stack_trace,
+            external_context=external_context,
+            memory_context=memory_context
+        )
+        return json.loads(result)
     except Exception as e:
+        logger.error(f"❌ Direct analysis failed: {str(e)}")
         return {
-            "root_cause": "Analysis failed",
-            "solution": "Manual investigation required",
+            "root_cause": "Analysis requires LLM - please check Bedrock configuration",
+            "explanation": f"The root cause agent could not complete analysis. Error: {str(e)}",
+            "solution": "1. Check that Bedrock is enabled in your AWS account\n2. Verify IAM permissions for bedrock:InvokeModel\n3. Check the AWS region supports Claude",
             "confidence": 0,
-            "category": "unknown",
-            "source": "error",
+            "category": "other",
             "error": str(e)
         }
-

@@ -47,7 +47,7 @@ variable "hosted_zone_name" {
 variable "llm_model_id" {
   description = "Bedrock LLM model ID for code generation and analysis"
   type        = string
-  default     = "anthropic.claude-3-sonnet-20240229-v1:0"
+  default     = "anthropic.claude-haiku-4-5-2025-1001-v1:0"
 }
 
 variable "embedding_model_id" {

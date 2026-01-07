@@ -22,7 +22,7 @@ import boto3
 from typing import Dict, Any, List, Optional
 from strands import Agent, tool
 
-from .config import DEMO_MODE, GITHUB_TOKEN, GITHUB_API_URL, STACKOVERFLOW_API_KEY, STACKOVERFLOW_API_URL, AWS_REGION
+from .config import DEMO_MODE, GITHUB_TOKEN, GITHUB_API_URL, STACKOVERFLOW_API_KEY, STACKOVERFLOW_API_URL, AWS_REGION, BEDROCK_MODEL_ID
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +352,7 @@ Return a JSON object with:
 }}"""
 
         response = bedrock_runtime.invoke_model(
-            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            modelId=BEDROCK_MODEL_ID,
             contentType="application/json",
             accept="application/json",
             body=json.dumps({
@@ -742,8 +742,12 @@ def _call_github_api(query: str, language: str = "") -> List[Dict]:
         
     except Exception as e:
         logger.error(f"❌ GitHub API error: {str(e)}")
-        # Fall back to simulated results on error
-        return _get_simulated_github_results(query, language)
+        # NO FALLBACK - return error
+        return [{
+            "source": "error",
+            "error": f"GitHub API call failed: {str(e)}",
+            "message": "Could not search GitHub. Check API token and network connectivity."
+        }]
 
 
 def _call_stackoverflow_api(query: str, tags: str = "") -> List[Dict]:
@@ -793,8 +797,12 @@ def _call_stackoverflow_api(query: str, tags: str = "") -> List[Dict]:
         
     except Exception as e:
         logger.error(f"❌ Stack Overflow API error: {str(e)}")
-        # Fall back to simulated results on error
-        return _get_simulated_stackoverflow_results(query, tags)
+        # NO FALLBACK - return error
+        return [{
+            "source": "error",
+            "error": f"Stack Overflow API call failed: {str(e)}",
+            "message": "Could not search Stack Overflow. Check network connectivity."
+        }]
 
 
 # =============================================================================
@@ -1176,19 +1184,8 @@ def _get_documentation_links(error_type: str, language: str) -> List[Dict]:
             "type": "official"
         })
     
-    # Error type specific
-    if error_type == "null_reference":
-        docs.append({
-            "title": "Handling Null Reference Errors",
-            "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Errors/Cant_access_property",
-            "type": "guide"
-        })
-    elif error_type == "type_error":
-        docs.append({
-            "title": "Understanding Type Errors",
-            "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypeError",
-            "type": "guide"
-        })
+    # NO static error_type → docs mapping
+    # The LLM will find relevant docs based on actual error content
     
     return docs
 

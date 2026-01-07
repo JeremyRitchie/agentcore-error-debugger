@@ -18,6 +18,12 @@ FEATURE_PART = int(os.environ.get('FEATURE_PART', '2'))
 # AWS Region
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 
+# Bedrock Model ID - Claude Haiku 4.5 for all agents
+# This should match the Terraform variable: var.llm_model_id
+# Set via environment variable LLM_MODEL_ID (from Terraform) or BEDROCK_MODEL_ID
+BEDROCK_MODEL_ID = os.environ.get('LLM_MODEL_ID', 
+                   os.environ.get('BEDROCK_MODEL_ID', 'anthropic.claude-haiku-4-5-2025-1001-v1:0'))
+
 # AgentCore Memory ID
 MEMORY_ID = os.environ.get('MEMORY_ID', '')
 

@@ -68,23 +68,43 @@ class GatewayTools:
             
         except Exception as e:
             logger.error(f"❌ Gateway call failed for {tool_name}: {e}")
-            # Fall back to simulation on error
-            return GatewayTools._simulate_tool(tool_name, params)
+            # NO FALLBACK - return the error so frontend can display it
+            return {
+                "success": False,
+                "error": f"Gateway call failed: {str(e)}",
+                "tool": tool_name,
+                "message": "The Lambda tool could not be invoked. Check Gateway configuration and Lambda permissions."
+            }
     
     @staticmethod
     def _simulate_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Simulate tool responses for demo mode."""
+        """
+        DEMO MODE ONLY - Run local versions of tools for UI testing.
+        
+        These use real parsing logic (regex, etc.) but run locally.
+        NOT fake/template responses - actual parsing, just not via Lambda.
+        
+        For production, DEMO_MODE=False calls real Lambdas via Gateway.
+        """
         
         if tool_name == "parse_error":
-            return GatewayTools._simulate_parser(params)
+            result = GatewayTools._simulate_parser(params)
+            result["_demo_mode"] = True
+            return result
         elif tool_name == "scan_security":
-            return GatewayTools._simulate_security(params)
+            result = GatewayTools._simulate_security(params)
+            result["_demo_mode"] = True
+            return result
         elif tool_name == "search_error_context":
-            return GatewayTools._simulate_context(params)
+            result = GatewayTools._simulate_context(params)
+            result["_demo_mode"] = True
+            return result
         elif tool_name == "manage_error_stats":
-            return GatewayTools._simulate_stats(params)
+            result = GatewayTools._simulate_stats(params)
+            result["_demo_mode"] = True
+            return result
         else:
-            return {"error": f"Unknown tool: {tool_name}"}
+            return {"error": f"Unknown tool: {tool_name}", "_demo_mode": True}
     
     # =========================================================================
     # PARSER TOOL
@@ -238,83 +258,15 @@ class GatewayTools:
                 language_confidence = score
                 language = lang
         
-        # Classify error type with comprehensive patterns
-        error_type = "unknown"
-        error_lower = error_text.lower()
-        
-        # Terraform/IaC errors
-        if "unsupported block type" in error_lower or "blocks of type" in error_lower:
-            error_type = "config_error"
-            if language == "unknown":
-                language = "terraform"
-        elif "unsupported argument" in error_lower or "an argument named" in error_lower:
-            error_type = "config_error"
-            if language == "unknown":
-                language = "terraform"
-        elif "invalid reference" in error_lower or "resource.*does not exist" in error_lower:
-            error_type = "config_error"
-        elif "missing required argument" in error_lower:
-            error_type = "config_error"
-        
-        # Null/undefined errors
-        elif "undefined" in error_lower or "null" in error_lower or "none" in error_lower:
-            error_type = "null_reference"
-        elif "'nonetype' object" in error_lower:
-            error_type = "null_reference"
-        elif "cannot read propert" in error_lower:
-            error_type = "null_reference"
-        
-        # Type errors
-        elif "typeerror" in error_lower:
-            error_type = "type_error"
-        elif "is not a function" in error_lower:
-            error_type = "type_error"
-        elif "type mismatch" in error_lower:
-            error_type = "type_error"
-        
-        # Syntax errors
-        elif "syntaxerror" in error_lower or "syntax error" in error_lower:
-            error_type = "syntax_error"
-        elif "unexpected token" in error_lower:
-            error_type = "syntax_error"
-        elif "parse error" in error_lower:
-            error_type = "syntax_error"
-        
-        # Import/module errors
-        elif "modulenotfounderror" in error_lower or "no module named" in error_lower:
-            error_type = "import_error"
-        elif "importerror" in error_lower:
-            error_type = "import_error"
-        elif "cannot find module" in error_lower:
-            error_type = "import_error"
-        
-        # Connection errors
-        elif "econnrefused" in error_lower or "connection refused" in error_lower:
-            error_type = "connection_error"
-        elif "timeout" in error_lower or "etimedout" in error_lower:
-            error_type = "connection_error"
-        
-        # Permission errors
-        elif "permission denied" in error_lower or "eacces" in error_lower:
-            error_type = "permission_error"
-        elif "access denied" in error_lower or "forbidden" in error_lower:
-            error_type = "permission_error"
-        
-        # Key/Index errors
-        elif "keyerror" in error_lower:
-            error_type = "key_error"
-        elif "indexerror" in error_lower or "index out of" in error_lower:
-            error_type = "index_error"
-        
-        # Validation errors
-        elif "validation" in error_lower and "error" in error_lower:
-            error_type = "validation_error"
+        # NO static error type classification - let the LLM analyze the error
+        # We only extract structural info (stack frames, language)
         
         return {
-            "error_type": error_type,
             "language": language,
+            "language_confidence": min(language_confidence, 100),
             "stack_frames": frames,
             "frame_count": len(frames),
+            "raw_error": error_text[:500],  # Pass raw error for LLM to analyze
             "mode": "demo"
         }
     

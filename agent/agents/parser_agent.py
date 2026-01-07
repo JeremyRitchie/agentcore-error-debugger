@@ -12,7 +12,7 @@ import boto3
 from typing import Dict, Any, List
 from strands import Agent, tool
 
-from .config import DEMO_MODE, AWS_REGION
+from .config import DEMO_MODE, AWS_REGION, BEDROCK_MODEL_ID
 
 logger = logging.getLogger(__name__)
 
@@ -28,55 +28,9 @@ except Exception as e:
 # ERROR PATTERNS - For classification
 # =============================================================================
 
-ERROR_PATTERNS = {
-    # Infrastructure / Config errors
-    "config_error": [
-        r"(?i)(Unsupported block type|Unsupported argument|Missing required argument)",
-        r"(?i)(Invalid reference|Reference to undeclared|blocks of type.*not expected)",
-        r"(?i)(Error:.*on.*\.tf|Error:.*terraform)",
-        r"(?i)(Invalid.*configuration|Configuration.*invalid)",
-    ],
-    "null_reference": [
-        r"(?i)(cannot read propert|undefined is not|null pointer|NoneType|'None' object)",
-        r"(?i)(TypeError:.*undefined|TypeError:.*null)",
-    ],
-    "type_error": [
-        r"(?i)(TypeError|type mismatch|expected.*got|cannot convert)",
-        r"(?i)(argument.*type|invalid type)",
-    ],
-    "syntax_error": [
-        r"(?i)(SyntaxError|unexpected token|parse error|invalid syntax)",
-        r"(?i)(missing.*bracket|unterminated string)",
-    ],
-    "import_error": [
-        r"(?i)(ImportError|ModuleNotFoundError|No module named|cannot find module)",
-        r"(?i)(require\(|import.*from.*failed)",
-    ],
-    "connection_error": [
-        r"(?i)(ConnectionError|ECONNREFUSED|timeout|network.*unreachable)",
-        r"(?i)(failed to connect|connection refused|socket error)",
-    ],
-    "permission_error": [
-        r"(?i)(PermissionError|Access denied|EACCES|forbidden|unauthorized)",
-        r"(?i)(permission denied|not permitted)",
-    ],
-    "memory_error": [
-        r"(?i)(MemoryError|OutOfMemory|heap.*overflow|stack overflow)",
-        r"(?i)(memory allocation|out of memory|ENOMEM)",
-    ],
-    "file_error": [
-        r"(?i)(FileNotFoundError|ENOENT|No such file|file not found)",
-        r"(?i)(cannot open|failed to read|path does not exist)",
-    ],
-    "key_error": [
-        r"(?i)(KeyError|index out of|IndexError|undefined index)",
-        r"(?i)(array index|list index|key.*not found)",
-    ],
-    "validation_error": [
-        r"(?i)(ValidationError|invalid.*format|does not match|assertion failed)",
-        r"(?i)(constraint violation|schema.*invalid)",
-    ],
-}
+# NO static ERROR_PATTERNS - error classification should be done by LLM
+# The parser only extracts structural info (stack frames, language)
+# The root cause agent will analyze what type of error it is
 
 LANGUAGE_PATTERNS = {
     "python": [r"\.py:", r"Traceback \(most recent call last\)", r"File \".*\.py\""],
@@ -226,7 +180,7 @@ Respond ONLY with this JSON format:
 
     try:
         response = bedrock_runtime.invoke_model(
-            modelId="anthropic.claude-3-haiku-20240307-v1:0",  # Fast model for quick detection
+            modelId=BEDROCK_MODEL_ID,
             contentType="application/json",
             accept="application/json",
             body=json.dumps({
@@ -250,43 +204,8 @@ Respond ONLY with this JSON format:
     return {}
 
 
-@tool(name="classify_error_type")
-def classify_error_type(error_text: str) -> str:
-    """
-    Classify the error into predefined categories using pattern matching.
-    Categories: null_reference, type_error, syntax_error, import_error, etc.
-    
-    Args:
-        error_text: The error message to classify
-    
-    Returns:
-        JSON with error classification and matched patterns
-    """
-    logger.info("🔧 Classifying error type")
-    
-    matches = []
-    for error_type, patterns in ERROR_PATTERNS.items():
-        for pattern in patterns:
-            if re.search(pattern, error_text):
-                matches.append({
-                    "type": error_type,
-                    "pattern": pattern,
-                    "match": re.search(pattern, error_text).group(0)
-                })
-                break  # One match per type is enough
-    
-    # Determine primary error type
-    primary_type = matches[0]["type"] if matches else "unknown"
-    
-    result = {
-        "primary_type": primary_type,
-        "all_types": [m["type"] for m in matches],
-        "match_count": len(matches),
-        "matches": matches[:5]  # Limit details
-    }
-    
-    logger.info(f"✅ Classified as: {primary_type}")
-    return json.dumps(result)
+# classify_error_type REMOVED - no static error classification
+# The LLM will analyze the error directly without predefined categories
 
 
 @tool(name="extract_error_message")
@@ -358,14 +277,14 @@ You are the first agent in the analysis pipeline - your output feeds other agent
 ## YOUR TOOLS
 - extract_stack_frames: Parse file paths, line numbers, and function names from stack traces
 - detect_programming_language: Identify which language produced the error  
-- classify_error_type: Categorize the error (null_reference, type_error, syntax_error, etc.)
 - extract_error_message: Extract the core error message from noisy output
 
 ## YOUR WORKFLOW
 1. Call extract_error_message to get the core error
 2. Call detect_programming_language to identify the source language
-3. Call classify_error_type to categorize the error
-4. Call extract_stack_frames to get the stack trace structure
+3. Call extract_stack_frames to get the stack trace structure
+
+NOTE: Error TYPE classification is done by the root cause agent using LLM, not static patterns.
 
 ## OUTPUT FORMAT
 Return a JSON object with:
@@ -384,7 +303,7 @@ Always return valid JSON only, no additional text.
 
 parser_agent = Agent(
     system_prompt=PARSER_AGENT_PROMPT,
-    tools=[extract_stack_frames, detect_programming_language, classify_error_type, extract_error_message],
+    tools=[extract_stack_frames, detect_programming_language, extract_error_message],
 )
 
 
@@ -430,32 +349,34 @@ def parse(error_text: str) -> Dict[str, Any]:
 
 
 def _direct_parse(error_text: str) -> Dict[str, Any]:
-    """Direct parsing fallback without agent reasoning."""
+    """
+    Direct parsing - extracts structural info only.
+    NO static error classification - that's done by root cause agent.
+    """
     try:
         msg_result = json.loads(extract_error_message(error_text))
         lang_result = json.loads(detect_programming_language(error_text))
-        type_result = json.loads(classify_error_type(error_text))
         frames_result = json.loads(extract_stack_frames(error_text))
         
         return {
-            "error_type": type_result.get("primary_type", "unknown"),
+            # NO error_type - LLM will analyze this
             "language": lang_result.get("language", "unknown"),
             "language_confidence": lang_result.get("confidence", 0),
             "core_message": msg_result.get("message", error_text[:200]),
             "stack_frames": frames_result.get("frames", []),
             "frame_count": frames_result.get("frame_count", 0),
-            "classification_confidence": min(len(type_result.get("matches", [])) * 25, 100)
+            "raw_error": error_text[:1000]  # Pass raw for LLM analysis
         }
     except Exception as e:
         logger.error(f"Direct parse failed: {str(e)}")
         return {
-            "error_type": "unknown",
+            "success": False,
+            "error": str(e),
             "language": "unknown",
             "language_confidence": 0,
             "core_message": error_text[:200],
             "stack_frames": [],
             "frame_count": 0,
-            "classification_confidence": 0,
-            "error": str(e)
+            "raw_error": error_text[:1000]
         }
 

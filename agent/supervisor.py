@@ -128,14 +128,14 @@ session_context = {
     # Original error
     "original_error": "",
     
-    # From Parser
+    # From Parser (structural info only - no static error_type classification)
     "parsed": {
         "language": "unknown",
         "language_confidence": 0,
-        "error_type": "unknown",
         "core_message": "",
         "stack_frames": [],
         "file_paths": [],
+        "raw_error": "",
     },
     
     # From Security
@@ -189,7 +189,7 @@ def reset_session_context():
     global session_context
     session_context = {
         "original_error": "",
-        "parsed": {"language": "unknown", "language_confidence": 0, "error_type": "unknown", "core_message": "", "stack_frames": [], "file_paths": []},
+        "parsed": {"language": "unknown", "language_confidence": 0, "core_message": "", "stack_frames": [], "file_paths": [], "raw_error": ""},
         "security": {"risk_level": "unknown", "safe_to_store": True, "pii_found": [], "secrets_found": []},
         "memory": {"matches": [], "has_solution": False, "best_match_similarity": 0},
         "external": {"github_issues": [], "stackoverflow_questions": [], "stackoverflow_answers": [], "code_examples": [], "top_solutions": [], "common_causes": []},
@@ -272,7 +272,6 @@ def event_loop_tracker(**kwargs):
             # Memory Operations
             "search_memory": "🔎 EXECUTING: Searching long-term memory for similar errors",
             "store_pattern": "💾 EXECUTING: Storing error pattern in memory",
-            "store_session": "📝 EXECUTING: Storing session context",
             
             # Stats Operations
             "record_stats": "📊 EXECUTING: Recording error statistics",
@@ -306,18 +305,17 @@ def parser_agent_tool(error_text: str) -> str:
     update_component_status("parser", "running", f"Parsing {len(error_text)} chars...")
     try:
         result = gateway_tools.parse_error(error_text)
-        error_type = result.get('error_type', 'unknown')
         language = result.get('language', 'unknown')
         
         if result.get('error'):
             update_component_status("parser", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
         
-        update_component_status("parser", "success", f"Detected: {language} | {error_type}")
+        update_component_status("parser", "success", f"Detected: {language}")
         return json.dumps({"success": True, **result})
     except Exception as e:
         update_component_status("parser", "error", error=str(e))
-        return json.dumps({"success": False, "error": str(e), "error_type": "unknown"})
+        return json.dumps({"success": False, "error": str(e)})
 
 
 # ============================================================================
@@ -463,14 +461,14 @@ def rootcause_agent_tool(
     name="fix_agent_tool",
     description="""Generate code fixes using Bedrock Claude code generation.
     
-    IMPORTANT: Pass comprehensive context for better fixes:
-    - error_text: The full error message
+    Pass context for the LLM to analyze:
+    - error_text: The full error message and stack trace
     - root_cause: The identified root cause (from rootcause_agent)
-    - language: The detected programming language (REQUIRED for correct syntax)
+    - language: The detected programming language
     - stack_frames: JSON of stack frames (helps identify which file/line to fix)
     - external_solutions: JSON of solutions found from GitHub/SO (optional but helpful)
     
-    The more context, the more specific and accurate the fix."""
+    The LLM will analyze the error and generate an appropriate fix."""
 )
 def fix_agent_tool(
     error_text: str, 
@@ -566,19 +564,9 @@ def store_pattern(error_type: str, signature: str, root_cause: str, solution: st
         return json.dumps({"error": str(e)})
 
 
-@tool(
-    name="store_session",
-    description="Store context in SHORT-TERM session memory. Maintains state during debugging session (24hr TTL)."
-)
-def store_session(context_type: str, content: str) -> str:
-    """Store session context."""
-    logger.info(f"📝 Storing session: {context_type}")
-    try:
-        result = memory_agent.store_context(context_type, content)
-        return json.dumps(result)
-    except Exception as e:
-        logger.error(f"❌ Store session error: {str(e)}")
-        return json.dumps({"error": str(e)})
+# NOTE: store_session tool REMOVED
+# Short-term memory was causing stale/wrong data to pollute new analyses.
+# We now use the local session_context dict which is reset on each analysis.
 
 
 # ============================================================================
@@ -785,7 +773,7 @@ You THINK → ACT → OBSERVE → REFLECT → DECIDE whether to continue or outp
 │  3. OBSERVE: What did the tool return? Is it useful?                │
 │  4. REFLECT: Do I have enough information? Am I confident?          │
 │  5. DECIDE:                                                          │
-│     - If confident (≥80%) → Produce final output                    │
+│     - If confident (≥90%) → Produce final output                    │
 │     - If not confident → Loop back to step 1                        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -794,7 +782,7 @@ You THINK → ACT → OBSERVE → REFLECT → DECIDE whether to continue or outp
 
 Re-run or try different approaches when:
 - Parser returned "unknown" for language → Try inferring from patterns in the error
-- Root cause confidence < 70% → Gather more context, try different search terms
+- Root cause confidence < 90% → Gather more context, try different search terms
 - External context found 0 results → Try different search queries
 - The fix doesn't seem to address the root cause → Re-analyze
 - You realize you missed something → Go back and get it
@@ -803,7 +791,7 @@ Re-run or try different approaches when:
 
 Only produce final output when:
 - You have identified the language with reasonable confidence
-- You have a root cause hypothesis with ≥70% confidence
+- You have a root cause hypothesis with ≥90% confidence
 - You have a concrete, actionable fix
 - The fix actually addresses the root cause
 
@@ -876,7 +864,7 @@ Should I continue gathering info or am I ready to conclude?
 
 5. **ROOT CAUSE** analysis
    - Pass ALL context gathered: parsed info, external findings, memory matches
-   - If confidence < 70%, consider gathering more context
+   - If confidence < 90%, consider gathering more context
    - If the root cause seems wrong, question it
 
 ## Phase 4: Solution (only when confident)
@@ -925,7 +913,7 @@ read_github_file_tool(repo_url="...", file_path="gateway.tf")
 
 # OUTPUT FORMAT (only when ready)
 
-When you are CONFIDENT (≥70%), produce the final output:
+When you are CONFIDENT (≥90%), produce the final output:
 
 ```markdown
 ## 🔍 Analysis Complete
@@ -994,7 +982,8 @@ def build_tools_list():
             read_github_file_tool,   # Read source files from GitHub repos
             search_memory,           # Memory operations
             store_pattern,
-            store_session,
+            # NOTE: store_session REMOVED - we use local session_context instead
+            # Short-term memory was causing stale data to pollute new analyses
             record_stats,            # Statistics
             get_trend,
         ])

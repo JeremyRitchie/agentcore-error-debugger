@@ -16,7 +16,7 @@ import boto3
 from typing import Dict, Any, Optional
 from strands import Agent, tool
 
-from .config import DEMO_MODE, AWS_REGION
+from .config import DEMO_MODE, AWS_REGION, BEDROCK_MODEL_ID
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ Respond with ONLY this JSON, no other text:
     
     try:
         response = bedrock_runtime.invoke_model(
-            modelId="anthropic.claude-3-sonnet-20240229-v1:0",
+            modelId=BEDROCK_MODEL_ID,
             contentType="application/json",
             accept="application/json",
             body=json.dumps({
@@ -293,12 +293,20 @@ def analyze(
         if so:
             ext_ctx += f"StackOverflow: {json.dumps(so[:3])}\n"
     
-    # Format memory context
+    # Format memory context - but only if it's actually relevant
     mem_ctx = ""
     if memory_context:
-        matches = memory_context.get('matches', [])
-        if matches:
-            mem_ctx = f"Similar past errors: {json.dumps(matches[:3])}"
+        matches = memory_context.get('results', memory_context.get('matches', []))
+        has_relevant = memory_context.get('has_relevant_match', False)
+        best_score = memory_context.get('best_match_score', 0)
+        
+        if matches and has_relevant and best_score >= 70:
+            # Only include memory context if it's actually a good match
+            mem_ctx = f"Similar past errors (relevance: {best_score}%): {json.dumps(matches[:2])}"
+        elif matches and best_score >= 50:
+            # Include with a warning if it's a moderate match
+            mem_ctx = f"Possibly related past errors (relevance: {best_score}% - verify these are relevant): {json.dumps(matches[:1])}"
+        # If best_score < 50, don't include memory context at all - it's likely noise
     
     try:
         # Build the analysis request

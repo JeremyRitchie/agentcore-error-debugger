@@ -105,31 +105,57 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
     """
     logger.info(f"🔎 Searching for similar errors... (mode: {'DEMO' if DEMO_MODE else 'LIVE'})")
     
+    # Extract error_type and language from query if embedded (format: "[python] import_error: ...")
+    detected_language = ""
+    detected_error_type = ""
+    
+    import re
+    lang_match = re.search(r'\[(\w+)\]', error_text)
+    if lang_match:
+        detected_language = lang_match.group(1)
+    
+    type_match = re.search(r'^(\w+_?\w*):', error_text)
+    if type_match:
+        detected_error_type = type_match.group(1)
+    
+    # Minimum relevance threshold - matches below this are considered noise
+    MIN_RELEVANCE_THRESHOLD = 50
+    
     # Use local search in demo mode
     if DEMO_MODE:
         logger.info("📦 Demo mode: Using local memory search")
-        results = _local_search(error_text)[:limit]
+        results = _local_search(error_text, detected_error_type, detected_language, MIN_RELEVANCE_THRESHOLD)[:limit]
+        
+        # Filter out low-relevance matches
+        high_quality_results = [r for r in results if r.get('relevance_score', 0) >= MIN_RELEVANCE_THRESHOLD]
+        
         return json.dumps({
             "success": True,
             "memory_type": "LONG-TERM (local)",
             "query": error_text[:100],
-            "count": len(results),
-            "results": results,
-            "has_solutions": len(results) > 0,
-            "mode": "demo"
+            "count": len(high_quality_results),
+            "results": high_quality_results,
+            "has_solutions": len(high_quality_results) > 0,
+            "has_relevant_match": len(high_quality_results) > 0 and high_quality_results[0].get('relevance_score', 0) >= 70,
+            "best_match_score": high_quality_results[0].get('relevance_score', 0) if high_quality_results else 0,
+            "mode": "demo",
+            "note": "Only showing matches with relevance >= 50%"
         })
     
     try:
         if not MEMORY_ID or not bedrock_agentcore:
             logger.warning("Memory not configured, using local fallback")
-            results = _local_search(error_text)[:limit]
+            results = _local_search(error_text, detected_error_type, detected_language, MIN_RELEVANCE_THRESHOLD)[:limit]
+            high_quality_results = [r for r in results if r.get('relevance_score', 0) >= MIN_RELEVANCE_THRESHOLD]
+            
             return json.dumps({
                 "success": True,
                 "memory_type": "LONG-TERM (local)",
                 "query": error_text[:100],
-                "count": len(results),
-                "results": results,
-                "has_solutions": len(results) > 0,
+                "count": len(high_quality_results),
+                "results": high_quality_results,
+                "has_solutions": len(high_quality_results) > 0,
+                "has_relevant_match": len(high_quality_results) > 0 and high_quality_results[0].get('relevance_score', 0) >= 70,
                 "message": "No long-term memory configured, using local"
             })
         
@@ -151,12 +177,26 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
                 if data.get('pattern_type') != 'error_pattern':
                     continue
                 
+                relevance = result.get('score', 0)
+                
+                # Skip low relevance matches
+                if relevance < MIN_RELEVANCE_THRESHOLD:
+                    continue
+                
+                # Additional filter: if we detected an error type, the stored pattern should match
+                stored_error_type = data.get('error_type', '').lower()
+                if detected_error_type and detected_error_type.lower() not in stored_error_type:
+                    # Penalize but don't completely exclude
+                    relevance = relevance * 0.5
+                    if relevance < MIN_RELEVANCE_THRESHOLD:
+                        continue
+                
                 results.append({
                     "error_type": data.get('error_type'),
                     "root_cause": data.get('root_cause'),
                     "solution": data.get('solution'),
                     "language": data.get('language'),
-                    "relevance_score": result.get('score', 0),
+                    "relevance_score": relevance,
                     "success_count": data.get('success_count', 1),
                     "timestamp": data.get('timestamp'),
                 })
@@ -167,14 +207,17 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
         results.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
         results = results[:limit]
         
-        logger.info(f"✅ Found {len(results)} similar errors")
+        logger.info(f"✅ Found {len(results)} relevant similar errors (filtered by threshold)")
         return json.dumps({
             "success": True,
             "memory_type": "LONG-TERM (Semantic)",
             "query": error_text[:100],
             "count": len(results),
             "results": results,
-            "has_solutions": len(results) > 0
+            "has_solutions": len(results) > 0,
+            "has_relevant_match": len(results) > 0 and results[0].get('relevance_score', 0) >= 70,
+            "best_match_score": results[0].get('relevance_score', 0) if results else 0,
+            "note": "Only showing matches with relevance >= 50%"
         })
         
     except Exception as e:
@@ -344,39 +387,8 @@ def _store_to_agentcore(event_data: Dict[str, Any], memory_type: str) -> Dict[st
 _local_session_memory: Dict[str, Any] = {}
 _local_semantic_memory: List[Dict[str, Any]] = []
 
-# Pre-seed with some error patterns for demo
-_local_semantic_memory.extend([
-    {
-        "pattern_type": "error_pattern",
-        "error_type": "null_reference",
-        "error_signature": "cannot_read_map_undefined",
-        "root_cause": "Array data is undefined when .map() is called",
-        "solution": "Add optional chaining: data?.map() or initialize with []",
-        "language": "javascript",
-        "success_count": 15,
-        "timestamp": "2024-01-15T10:30:00Z"
-    },
-    {
-        "pattern_type": "error_pattern",
-        "error_type": "import_error",
-        "error_signature": "module_not_found",
-        "root_cause": "Package not installed or wrong import path",
-        "solution": "Run npm install or pip install, verify package name",
-        "language": "python",
-        "success_count": 12,
-        "timestamp": "2024-02-20T14:45:00Z"
-    },
-    {
-        "pattern_type": "error_pattern",
-        "error_type": "connection_error",
-        "error_signature": "econnrefused",
-        "root_cause": "Target service not running or wrong port",
-        "solution": "Verify service is running, check port number",
-        "language": "javascript",
-        "success_count": 8,
-        "timestamp": "2024-03-10T09:15:00Z"
-    },
-])
+# NO pre-seeded patterns - memory should only contain patterns stored during actual use
+# Static patterns were causing false matches and polluting analysis
 
 
 def _local_store(event_data: Dict[str, Any], memory_type: str) -> Dict[str, Any]:
@@ -425,28 +437,42 @@ def _local_retrieve(memory_type: str, key: str = None) -> Dict[str, Any]:
         }
 
 
-def _local_search(query: str) -> List[Dict]:
-    """Local semantic search simulation."""
+def _local_search(query: str, error_type: str = "", language: str = "", min_score: int = 50) -> List[Dict]:
+    """
+    Local memory search - only searches patterns stored during actual use.
+    
+    NO static pattern matching - the memory is empty until patterns are stored
+    from successful debugging sessions.
+    """
+    # Memory starts empty - only contains patterns from actual successful sessions
+    if not _local_semantic_memory:
+        return []
+    
     query_lower = query.lower()
     results = []
     
     for pattern in _local_semantic_memory:
         if pattern.get('pattern_type') != 'error_pattern':
             continue
-            
-        # Simple keyword matching
+        
+        # Simple keyword matching for stored patterns (not static rules)
+        searchable = f"{pattern.get('root_cause', '')} {pattern.get('solution', '')}".lower()
+        
+        # Score based on matching key terms
         score = 0
-        searchable = f"{pattern.get('error_type', '')} {pattern.get('root_cause', '')} {pattern.get('solution', '')}"
-        searchable_lower = searchable.lower()
+        key_terms = [word for word in query_lower.split() if len(word) > 4]
+        for term in key_terms:
+            if term in searchable:
+                score += 20
         
-        for word in query_lower.split():
-            if word in searchable_lower:
-                score += 1
+        # Language bonus
+        if language and pattern.get('language', '').lower() == language.lower():
+            score += 15
         
-        if score > 0:
+        if score >= min_score:
             results.append({
                 **pattern,
-                "relevance_score": score * 20
+                "relevance_score": min(score, 100)
             })
     
     return sorted(results, key=lambda x: x.get('relevance_score', 0), reverse=True)

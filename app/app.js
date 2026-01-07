@@ -1285,24 +1285,120 @@ async function callAgentCoreBackend(errorText) {
             throw new Error(`API error ${response.status}: ${errorData}`);
         }
         
-        // Check if streaming response
-        const contentType = response.headers.get('content-type') || '';
+        // Parse JSON response (Lambda collects stream and returns structured data)
+        const data = await response.json();
         
-        if (contentType.includes('text/event-stream')) {
-            // Handle streaming SSE response
-            result = await handleStreamingResponse(response, result);
-        } else {
-            // Handle regular JSON response (fallback)
-            const data = await response.json();
-            
-            if (!data.success) {
-                throw new Error(data.error || 'Unknown error from AgentCore');
+        if (!data.success) {
+            throw new Error(data.error || 'Unknown error from AgentCore');
+        }
+        
+        console.log('📥 AgentCore Response:', {
+            eventCount: data.eventCount,
+            agentActivity: data.agentActivity,
+            agents: data.agents,
+            result: data.result?.substring?.(0, 500) || data.result
+        });
+        
+        // Process agent activity for UI updates
+        if (data.agentActivity) {
+            for (const activity of data.agentActivity) {
+                if (activity.type === 'tool_call') {
+                    addLogEntry(`🔧 ${activity.tool}`, 'tool');
+                    if (state) state.toolsUsed++;
+                } else if (activity.type === 'tool_result') {
+                    addLogEntry(`✅ ${activity.tool} complete`, 'tool-result');
+                }
+            }
+        }
+        
+        // Use structured agent data if available
+        if (data.agents) {
+            if (data.agents.parser) {
+                result.parsed = {
+                    language: data.agents.parser.language || 'unknown',
+                    languageConfidence: data.agents.parser.confidence || data.agents.parser.language_confidence || 0,
+                    frameCount: data.agents.parser.stack_frames?.length || data.agents.parser.frame_count || 0,
+                    coreMessage: data.agents.parser.core_message || data.agents.parser.error_message || '',
+                    errorType: data.agents.parser.error_type || 'unknown',
+                    filePaths: data.agents.parser.file_paths || [],
+                    rawData: data.agents.parser
+                };
+                updateAgentStatus('parser', 'complete');
             }
             
-            const fullResponse = data.result || '';
-            console.log('📥 AgentCore Response (non-streaming):', { fullData: data });
-            result = parseAgentResponse(fullResponse, result);
+            if (data.agents.security) {
+                result.security = {
+                    riskLevel: data.agents.security.risk_level || 'low',
+                    secretsFound: data.agents.security.secrets_found || 0,
+                    piiFound: data.agents.security.pii_found || 0,
+                    safeToStore: data.agents.security.safe_to_store !== false,
+                    recommendations: data.agents.security.recommendations || [],
+                    rawData: data.agents.security
+                };
+                updateAgentStatus('security', 'complete');
+            }
+            
+            if (data.agents.context) {
+                result.context = {
+                    githubCount: data.agents.context.github_issues?.length || 0,
+                    stackoverflowCount: data.agents.context.stackoverflow_answers?.length || 0,
+                    allResources: [
+                        ...(data.agents.context.github_issues || []),
+                        ...(data.agents.context.stackoverflow_answers || [])
+                    ],
+                    explanation: data.agents.context.summary?.recommended_approach || '',
+                    rawData: data.agents.context
+                };
+                updateAgentStatus('context', 'complete');
+            }
+            
+            if (data.agents.rootcause) {
+                result.rootCause = {
+                    rootCause: data.agents.rootcause.root_cause || data.agents.rootcause.cause || '',
+                    confidence: data.agents.rootcause.confidence || 0,
+                    solution: data.agents.rootcause.solution || data.agents.rootcause.explanation || '',
+                    category: data.agents.rootcause.category || '',
+                    rawData: data.agents.rootcause
+                };
+                updateAgentStatus('rootcause', 'complete');
+            }
+            
+            if (data.agents.fix) {
+                result.fix = {
+                    fixType: data.agents.fix.fix_type || '',
+                    before: data.agents.fix.before || '',
+                    after: data.agents.fix.after || '',
+                    explanation: data.agents.fix.explanation || '',
+                    rawData: data.agents.fix
+                };
+                updateAgentStatus('fix', 'complete');
+            }
+            
+            if (data.agents.memory) {
+                result.memory = {
+                    count: data.agents.memory.matches?.length || 0,
+                    matches: data.agents.memory.matches || [],
+                    hasSolution: data.agents.memory.has_solution || false,
+                    rawData: data.agents.memory
+                };
+            }
+            
+            if (data.agents.stats) {
+                result.stats = {
+                    recorded: data.agents.stats.recorded !== false,
+                    trend: data.agents.stats.trend || 'stable',
+                    rawData: data.agents.stats
+                };
+            }
         }
+        
+        // Also parse the final result text for any additional info
+        if (data.result && typeof data.result === 'string') {
+            result = parseAgentResponse(data.result, result);
+        }
+        
+        // Store raw response for debugging
+        result.rawResponse = data;
         
         // Mark supervisor complete
         updateAgentStatus('supervisor', 'complete');
@@ -1320,172 +1416,15 @@ async function callAgentCoreBackend(errorText) {
     }
 }
 
-// Handle streaming SSE response from Lambda
-async function handleStreamingResponse(response, result) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let eventCount = 0;
-    let finalResult = null;
-    let agentActivity = [];
-    
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            
-            buffer += decoder.decode(value, { stream: true });
-            
-            // Process complete SSE events
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; // Keep incomplete line in buffer
-            
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const dataStr = line.substring(6).trim();
-                    if (!dataStr) continue;
-                    
-                    try {
-                        const event = JSON.parse(dataStr);
-                        eventCount++;
-                        
-                        // Route based on event type
-                        processStreamEvent(event, result, agentActivity);
-                        
-                        // Capture final result
-                        if (event._eventType === 'final_result' && event.result) {
-                            finalResult = event;
-                        }
-                        
-                    } catch (e) {
-                        // Plain text status message
-                        if (dataStr && !dataStr.startsWith('{')) {
-                            addLogEntry(`📡 ${dataStr}`, 'status');
-                        }
-                    }
-                }
-            }
-        }
-        
-        console.log(`📊 Processed ${eventCount} streaming events`);
-        console.log('🔧 Agent activity:', agentActivity);
-        
-        // Parse final result if we got one
-        if (finalResult && finalResult.result) {
-            result = parseAgentResponse(
-                typeof finalResult.result === 'string' ? finalResult.result : JSON.stringify(finalResult.result),
-                result
-            );
-        }
-        
-        // Store agent activity for display
-        result.agentActivity = agentActivity;
-        
-    } catch (e) {
-        console.error('Stream reading error:', e);
-        addLogEntry(`⚠️ Stream error: ${e.message}`, 'warning');
-    }
-    
-    return result;
-}
-
-// Process individual stream events
-function processStreamEvent(event, result, agentActivity) {
-    const eventType = event._eventType || 'unknown';
-    
-    switch (eventType) {
-        case 'tool_call':
-            // Agent is calling a tool
-            const toolName = extractToolName(event);
-            if (toolName) {
-                addLogEntry(`🔧 Tool call: ${toolName}`, 'tool');
-                agentActivity.push({ type: 'tool_call', tool: toolName, timestamp: Date.now() });
-                if (state) state.toolsUsed++;
-                
-                // Activate corresponding node
-                const nodeMap = { parser: 'parser', security: 'security', context: 'context', analyze_root_cause: 'rootcause', generate_fix: 'fix' };
-                if (nodeMap[toolName]) {
-                    activateNode(`node-${nodeMap[toolName]}`);
-                    updateAgentStatus(nodeMap[toolName], 'running');
-                }
-            }
-            break;
-            
-        case 'tool_result':
-            // Tool returned a result
-            const resultTool = extractToolName(event);
-            if (resultTool) {
-                addLogEntry(`✅ Tool result: ${resultTool}`, 'tool-result');
-                agentActivity.push({ type: 'tool_result', tool: resultTool, timestamp: Date.now() });
-                
-                const nodeMap = { parser: 'parser', security: 'security', context: 'context', analyze_root_cause: 'rootcause', generate_fix: 'fix' };
-                if (nodeMap[resultTool]) {
-                    deactivateNode(`node-${nodeMap[resultTool]}`);
-                    updateAgentStatus(nodeMap[resultTool], 'complete');
-                }
-            }
-            break;
-            
-        case 'token':
-            // Streaming token (agent thinking) - update live
-            const text = extractTokenText(event);
-            if (text && text.length > 50) {
-                // Only log substantial chunks
-                addLogEntry(`💭 ${text.substring(0, 100)}...`, 'thinking');
-            }
-            break;
-            
-        case 'status':
-            addLogEntry(`📡 ${event.text || 'Status update'}`, 'status');
-            break;
-            
-        case 'message':
-            addLogEntry('📨 Agent message received', 'message');
-            agentActivity.push({ type: 'message', timestamp: Date.now() });
-            break;
-            
-        case 'metadata':
-            // Token usage, latency, etc.
-            if (event.event?.metadata?.usage) {
-                const usage = event.event.metadata.usage;
-                console.log('📊 Token usage:', usage);
-                addLogEntry(`📊 Tokens: ${usage.totalTokens || 0}`, 'metadata');
-            }
-            break;
-            
-        case 'complete':
-            addLogEntry(`✅ Stream complete (${event.eventCount} events)`, 'complete');
-            break;
-            
-        case 'error':
-            addLogEntry(`❌ ${event.error || 'Unknown error'}`, 'error');
-            break;
-    }
-}
-
-// Helper to extract tool name from event
+// Helper to extract tool name from event (kept for compatibility)
 function extractToolName(event) {
-    // Try various paths where tool name might be
     if (event.event?.contentBlockStart?.start?.toolUse?.name) {
         return event.event.contentBlockStart.start.toolUse.name;
     }
     if (event.toolUse?.name) return event.toolUse.name;
     if (event.tool_use?.name) return event.tool_use.name;
     if (event.name) return event.name;
-    
-    // Search in stringified event
-    const str = JSON.stringify(event);
-    const match = str.match(/"name":\s*"([^"]+)"/);
-    return match ? match[1] : null;
-}
-
-// Helper to extract token text from event
-function extractTokenText(event) {
-    if (event.event?.contentBlockDelta?.delta?.text) {
-        return event.event.contentBlockDelta.delta.text;
-    }
-    if (event.delta?.text) return event.delta.text;
-    if (event.text) return event.text;
+    if (event.tool) return event.tool;
     return null;
 }
 

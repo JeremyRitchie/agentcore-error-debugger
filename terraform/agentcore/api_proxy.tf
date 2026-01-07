@@ -174,73 +174,151 @@ def handler(event, context):
         result_chunks = []
         
         if "text/event-stream" in content_type:
-            # Stream ALL events to the frontend for real-time display
-            logger.info("Streaming all agent activity to frontend...")
+            # Collect all events and extract data from each agent
+            logger.info("Processing streaming response...")
             response_body = response.get('response')
             
             if response_body:
-                def generate_stream():
-                    event_count = 0
-                    
-                    try:
-                        for line in response_body.iter_lines(chunk_size=1024):
-                            if line:
-                                line_text = line.decode('utf-8') if isinstance(line, bytes) else line
-                                event_count += 1
-                                
-                                # Parse and enrich events for frontend
-                                if line_text.startswith('data: '):
-                                    data = line_text[6:]
-                                    
-                                    # Try to parse and categorize the event
-                                    try:
-                                        parsed = json.loads(data)
-                                        
-                                        # Add event type for frontend routing
-                                        if 'tool_use' in str(parsed) or 'toolUse' in str(parsed):
-                                            parsed['_eventType'] = 'tool_call'
-                                        elif 'tool_result' in str(parsed) or 'toolResult' in str(parsed):
-                                            parsed['_eventType'] = 'tool_result'
-                                        elif 'result' in parsed:
-                                            parsed['_eventType'] = 'final_result'
-                                        elif 'message' in parsed:
-                                            parsed['_eventType'] = 'message'
-                                        elif 'contentBlockDelta' in str(parsed):
-                                            parsed['_eventType'] = 'token'
-                                        elif 'metadata' in parsed:
-                                            parsed['_eventType'] = 'metadata'
-                                        else:
-                                            parsed['_eventType'] = 'event'
-                                        
-                                        yield f"data: {json.dumps(parsed)}\n\n"
-                                    except json.JSONDecodeError:
-                                        # Plain text event (like status messages)
-                                        yield f"data: {json.dumps({'_eventType': 'status', 'text': data})}\n\n"
-                                else:
-                                    # Non-SSE line, wrap it
-                                    yield f"data: {json.dumps({'_eventType': 'raw', 'text': line_text})}\n\n"
-                        
-                        # Send completion event
-                        yield f"data: {json.dumps({'_eventType': 'complete', 'eventCount': event_count})}\n\n"
-                        logger.info(f"Streamed {event_count} events to frontend")
-                        
-                    except Exception as stream_err:
-                        logger.error(f"Stream error: {stream_err}")
-                        yield f"data: {json.dumps({'_eventType': 'error', 'error': str(stream_err)})}\n\n"
+                event_count = 0
+                final_result = None
+                final_message = None
                 
-                # Return streaming response
-                return {
-                    'statusCode': 200,
-                    'headers': {
-                        'Content-Type': 'text/event-stream',
-                        'Cache-Control': 'no-cache',
-                        'Connection': 'keep-alive',
-                        'Access-Control-Allow-Origin': '*'
-                    },
-                    'body': generate_stream()
+                # Track data from each agent
+                agent_results = {
+                    'parser': None,
+                    'security': None,
+                    'context': None,
+                    'rootcause': None,
+                    'fix': None,
+                    'memory': None,
+                    'stats': None
                 }
+                agent_activity = []
+                current_tool = None
+                
+                try:
+                    for line in response_body.iter_lines(chunk_size=1024):
+                        if line:
+                            line_text = line.decode('utf-8') if isinstance(line, bytes) else line
+                            event_count += 1
+                            
+                            if line_text.startswith('data: '):
+                                data = line_text[6:]
+                                
+                                try:
+                                    parsed = json.loads(data)
+                                    event_str = str(parsed)
+                                    
+                                    # Capture tool calls - remember which tool is being called
+                                    if 'toolUse' in event_str:
+                                        # Extract tool name
+                                        tool_name = None
+                                        if 'contentBlockStart' in event_str:
+                                            try:
+                                                tool_name = parsed.get('event', {}).get('contentBlockStart', {}).get('start', {}).get('toolUse', {}).get('name')
+                                            except:
+                                                pass
+                                        if not tool_name:
+                                            # Search for name in string
+                                            import re
+                                            match = re.search(r'"name":\s*"([^"]+)"', event_str)
+                                            if match:
+                                                tool_name = match.group(1)
+                                        
+                                        if tool_name:
+                                            current_tool = tool_name
+                                            agent_activity.append({
+                                                'type': 'tool_call',
+                                                'tool': tool_name,
+                                                'timestamp': event_count
+                                            })
+                                    
+                                    # Capture tool results - extract the actual data
+                                    elif 'toolResult' in event_str:
+                                        try:
+                                            # Try to extract the tool result content
+                                            tool_result = parsed.get('event', {}).get('contentBlockDelta', {}).get('delta', {}).get('toolResult', {})
+                                            if not tool_result:
+                                                tool_result = parsed.get('toolResult', parsed)
+                                            
+                                            content = tool_result.get('content', [])
+                                            if content and isinstance(content, list):
+                                                for c in content:
+                                                    if 'text' in c:
+                                                        result_text = c['text']
+                                                        # Try to parse as JSON
+                                                        try:
+                                                            result_data = json.loads(result_text)
+                                                        except:
+                                                            result_data = {'raw': result_text[:1000]}
+                                                        
+                                                        # Map to agent based on current_tool or content
+                                                        if current_tool:
+                                                            tool_lower = current_tool.lower()
+                                                            if 'parse' in tool_lower:
+                                                                agent_results['parser'] = result_data
+                                                            elif 'security' in tool_lower:
+                                                                agent_results['security'] = result_data
+                                                            elif 'context' in tool_lower or 'research' in tool_lower:
+                                                                agent_results['context'] = result_data
+                                                            elif 'root' in tool_lower or 'cause' in tool_lower:
+                                                                agent_results['rootcause'] = result_data
+                                                            elif 'fix' in tool_lower:
+                                                                agent_results['fix'] = result_data
+                                                            elif 'memory' in tool_lower:
+                                                                agent_results['memory'] = result_data
+                                                            elif 'stats' in tool_lower:
+                                                                agent_results['stats'] = result_data
+                                                        
+                                                        agent_activity.append({
+                                                            'type': 'tool_result',
+                                                            'tool': current_tool,
+                                                            'hasData': True
+                                                        })
+                                        except Exception as te:
+                                            logger.warning(f"Failed to parse tool result: {te}")
+                                    
+                                    # Capture final result
+                                    elif 'result' in parsed and not 'toolResult' in event_str:
+                                        final_result = parsed
+                                    
+                                    # Capture final message
+                                    elif 'message' in parsed and parsed.get('message', {}).get('role') == 'assistant':
+                                        final_message = parsed
+                                        
+                                except json.JSONDecodeError:
+                                    pass
+                    
+                    logger.info(f"Processed {event_count} events")
+                    logger.info(f"Agent results captured: {[k for k, v in agent_results.items() if v]}")
+                    
+                    # Build comprehensive response with all agent data
+                    response_data = {
+                        'success': True,
+                        'eventCount': event_count,
+                        'agentActivity': agent_activity,
+                        'agents': agent_results,  # Data from each agent
+                    }
+                    
+                    if final_result:
+                        response_data['result'] = final_result.get('result', final_result)
+                        response_data['fullResponse'] = final_result
+                    elif final_message:
+                        content = final_message.get('message', {}).get('content', [])
+                        if content and isinstance(content, list):
+                            text_parts = [c.get('text', '') for c in content if 'text' in c]
+                            response_data['result'] = '\n'.join(text_parts)
+                        response_data['fullResponse'] = final_message
+                    else:
+                        response_data['result'] = f"Analysis complete ({event_count} events)"
+                    
+                    result_chunks.append(json.dumps(response_data))
+                    
+                except Exception as stream_err:
+                    logger.error(f"Stream error: {stream_err}")
+                    result_chunks.append(json.dumps({'success': False, 'error': str(stream_err)}))
             else:
-                result_chunks.append('{"error": "No response body"}')
+                result_chunks.append('{"success": false, "error": "No response body"}')
         
         elif content_type == "application/json":
             # Handle standard JSON response
@@ -439,11 +517,11 @@ resource "aws_iam_role_policy_attachment" "api_proxy" {
   policy_arn = aws_iam_policy.api_proxy.arn
 }
 
-# Lambda Function URL - supports up to 15 min timeout and response streaming
+# Lambda Function URL - supports up to 15 min timeout
 resource "aws_lambda_function_url" "api_proxy" {
   function_name      = aws_lambda_function.api_proxy.function_name
   authorization_type = "NONE"  # Public access
-  invoke_mode        = "RESPONSE_STREAM"  # Enable streaming responses
+  invoke_mode        = "BUFFERED"  # Collect full response (Python doesn't support streaming easily)
 
   cors {
     allow_origins     = ["*"]

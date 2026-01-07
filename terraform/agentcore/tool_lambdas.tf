@@ -324,8 +324,8 @@ resource "aws_lambda_function" "context" {
     variables = {
       ENVIRONMENT       = var.environment
       LOG_LEVEL         = "INFO"
-      GITHUB_TOKEN      = ""  # Optional: set via secrets manager in production
-      STACKOVERFLOW_KEY = ""  # Optional: for higher rate limits
+      GITHUB_TOKEN      = var.github_token       # For GitHub API (5000 req/hr vs 60 req/hr)
+      STACKOVERFLOW_KEY = var.stackoverflow_api_key  # For Stack Overflow API
     }
   }
 

@@ -76,3 +76,21 @@ variable "session_memory_ttl_hours" {
   default     = 24
 }
 
+# GitHub API Token (optional but recommended for higher rate limits)
+# Without a token: 60 requests/hour
+# With a token: 5000 requests/hour
+variable "github_token" {
+  description = "GitHub Personal Access Token for API calls (optional but recommended)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# Stack Overflow API Key (optional)
+variable "stackoverflow_api_key" {
+  description = "Stack Overflow API key for higher rate limits (optional)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+

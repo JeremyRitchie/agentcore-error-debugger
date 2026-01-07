@@ -1318,35 +1318,73 @@ async function callAgentCoreBackend(errorText) {
                     language: data.agents.parser.language || 'unknown',
                     languageConfidence: data.agents.parser.confidence || data.agents.parser.language_confidence || 0,
                     frameCount: data.agents.parser.stack_frames?.length || data.agents.parser.frame_count || 0,
-                    coreMessage: data.agents.parser.core_message || data.agents.parser.error_message || '',
+                    // Support multiple field names for core message
+                    coreMessage: data.agents.parser.core_message || data.agents.parser.core_error || data.agents.parser.error_message || '',
                     errorType: data.agents.parser.error_type || 'unknown',
                     filePaths: data.agents.parser.file_paths || [],
+                    filePath: data.agents.parser.file_path || '',
+                    lineNumber: data.agents.parser.line_number || 0,
                     rawData: data.agents.parser
                 };
                 updateAgentStatus('parser', 'complete');
             }
             
             if (data.agents.security) {
+                // Support both count and boolean formats
+                const secretsFound = data.agents.security.secrets_found || 
+                                     (data.agents.security.secrets_detected ? 1 : 0);
+                const piiFound = data.agents.security.pii_found || 
+                                 (Array.isArray(data.agents.security.pii_found) ? data.agents.security.pii_found.length : 0) ||
+                                 (data.agents.security.pii_detected ? 1 : 0);
+                
                 result.security = {
                     riskLevel: data.agents.security.risk_level || 'low',
-                    secretsFound: data.agents.security.secrets_found || 0,
-                    piiFound: data.agents.security.pii_found || 0,
+                    secretsFound: secretsFound,
+                    piiFound: piiFound,
                     safeToStore: data.agents.security.safe_to_store !== false,
                     recommendations: data.agents.security.recommendations || [],
+                    analysis: data.agents.security.analysis || '',
                     rawData: data.agents.security
                 };
                 updateAgentStatus('security', 'complete');
             }
             
             if (data.agents.context) {
+                // Context returns stackoverflow_questions and/or stackoverflow_answers
+                const soData = data.agents.context.stackoverflow_answers || data.agents.context.stackoverflow_questions || [];
+                const ghData = data.agents.context.github_issues || [];
+                
+                // Normalize resources with source field for display
+                const allResources = [
+                    ...ghData.map((r, i) => ({
+                        ...r,
+                        source: 'github',
+                        relevance: r.relevance || (100 - i * 10),
+                        tags: r.labels || [],
+                    })),
+                    ...soData.map((r, i) => ({
+                        ...r,
+                        source: 'stackoverflow',
+                        relevance: r.relevance || (90 - i * 10),
+                        answers: r.answer_count || 0,
+                        accepted: r.is_answered || false,
+                    }))
+                ];
+                
+                // Generate search URLs from the error text
+                const searchQuery = encodeURIComponent(els.errorInput?.value?.substring(0, 100) || 'error');
+                
                 result.context = {
-                    githubCount: data.agents.context.github_issues?.length || 0,
-                    stackoverflowCount: data.agents.context.stackoverflow_answers?.length || 0,
-                    allResources: [
-                        ...(data.agents.context.github_issues || []),
-                        ...(data.agents.context.stackoverflow_answers || [])
-                    ],
-                    explanation: data.agents.context.summary?.recommended_approach || '',
+                    githubCount: ghData.length,
+                    stackoverflowCount: soData.length,
+                    allResources: allResources,
+                    explanation: data.agents.context.summary?.recommended_approach || 
+                                 data.agents.context.explanation || 
+                                 (allResources.length > 0 ? `Found ${allResources.length} relevant resources` : 'No external resources found'),
+                    searchUrls: {
+                        github: `https://github.com/search?q=${searchQuery}&type=issues`,
+                        stackoverflow: `https://stackoverflow.com/search?q=${searchQuery}`
+                    },
                     rawData: data.agents.context
                 };
                 updateAgentStatus('context', 'complete');
@@ -1356,8 +1394,11 @@ async function callAgentCoreBackend(errorText) {
                 result.rootCause = {
                     rootCause: data.agents.rootcause.root_cause || data.agents.rootcause.cause || '',
                     confidence: data.agents.rootcause.confidence || 0,
+                    // Use solution field, fallback to explanation
                     solution: data.agents.rootcause.solution || data.agents.rootcause.explanation || '',
+                    explanation: data.agents.rootcause.explanation || '',
                     category: data.agents.rootcause.category || '',
+                    contributingFactors: data.agents.rootcause.contributing_factors || [],
                     rawData: data.agents.rootcause
                 };
                 updateAgentStatus('rootcause', 'complete');
@@ -1366,19 +1407,26 @@ async function callAgentCoreBackend(errorText) {
             if (data.agents.fix) {
                 result.fix = {
                     fixType: data.agents.fix.fix_type || '',
-                    before: data.agents.fix.before || '',
-                    after: data.agents.fix.after || '',
+                    // Fix agent uses original_pattern/fixed_code, but also support before/after
+                    before: data.agents.fix.before || data.agents.fix.original_pattern || '',
+                    after: data.agents.fix.after || data.agents.fix.fixed_code || '',
                     explanation: data.agents.fix.explanation || '',
+                    // Support both additional_changes and prevention arrays
+                    additionalChanges: data.agents.fix.additional_changes || data.agents.fix.prevention || [],
+                    isValid: data.agents.fix.is_valid !== false,
+                    testCode: data.agents.fix.test_code || '',
                     rawData: data.agents.fix
                 };
                 updateAgentStatus('fix', 'complete');
             }
             
             if (data.agents.memory) {
+                const matches = data.agents.memory.matches || data.agents.memory.similar_errors || [];
                 result.memory = {
-                    count: data.agents.memory.matches?.length || 0,
-                    matches: data.agents.memory.matches || [],
+                    count: matches.length,
+                    matches: matches,
                     hasSolution: data.agents.memory.has_solution || false,
+                    analysis: data.agents.memory.analysis || '',
                     rawData: data.agents.memory
                 };
             }

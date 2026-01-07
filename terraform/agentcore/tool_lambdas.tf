@@ -90,47 +90,61 @@ def lambda_handler(event, context):
     
     # Extract stack frames using regex
     frames = []
-    patterns = [
-        r'File "(.+)", line (\d+), in (.+)',  # Python
-        r'at (.+) \((.+):(\d+):(\d+)\)',       # JavaScript
-        r'at (.+)\((.+):(\d+)\)',              # Java
+    file_paths = []
+    
+    # Python pattern
+    for match in re.finditer(r'File "(.+)", line (\d+), in (\w+)', error_text):
+        frames.append({'file': match.group(1), 'line': int(match.group(2)), 'function': match.group(3)})
+        file_paths.append(match.group(1))
+    
+    # JavaScript/TypeScript pattern
+    for match in re.finditer(r'at\s+(\w+)\s+\(([^:]+):(\d+):(\d+)\)', error_text):
+        frames.append({'file': match.group(2), 'line': int(match.group(3)), 'function': match.group(1)})
+        file_paths.append(match.group(2))
+    
+    # Detect programming language
+    language = 'unknown'
+    language_confidence = 0
+    
+    lang_patterns = [
+        ('terraform', r'on\s+\w+\.tf\s+line\s+\d+|\.tf\s+line\s+\d+|Unsupported block type', 95),
+        ('python', r'Traceback \(most recent call last\)|File ".*\.py"|\.py:', 90),
+        ('javascript', r'at\s+\w+\s+\([^)]*\.js:\d+:\d+\)|\.js:\d+', 85),
+        ('typescript', r'\.ts:\d+|\.tsx:\d+|error TS\d+:', 90),
+        ('java', r'at\s+[\w.]+\([\w]+\.java:\d+\)|\.java:\d+', 85),
+        ('go', r'panic:|goroutine \d+|\.go:\d+', 85),
+        ('rust', r'error\[E\d+\]:|\.rs:\d+', 85),
     ]
     
-    for line in error_text.splitlines():
-        for pattern in patterns:
-            match = re.match(pattern.strip(), line.strip())
-            if match:
-                frames.append({'raw': line.strip(), 'groups': match.groups()})
+    for lang, pattern, confidence in lang_patterns:
+        if re.search(pattern, error_text, re.IGNORECASE):
+            if confidence > language_confidence:
+                language = lang
+                language_confidence = confidence
+    
+    # Extract core error message (first line or key error)
+    core_message = ''
+    lines = error_text.strip().splitlines()
+    if lines:
+        # Look for common error patterns
+        for line in lines:
+            if any(x in line for x in ['Error:', 'Exception:', 'error:', 'failed', 'Failed']):
+                core_message = line.strip()[:200]
                 break
-    
-    # Classify error type
-    error_type = 'GenericError'
-    error_lower = error_text.lower()
-    if 'typeerror' in error_lower:
-        error_type = 'TypeError'
-    elif 'valueerror' in error_lower:
-        error_type = 'ValueError'
-    elif 'keyerror' in error_lower:
-        error_type = 'KeyError'
-    elif 'network' in error_lower or 'connection' in error_lower:
-        error_type = 'NetworkError'
-    elif 'database' in error_lower or 'sql' in error_lower:
-        error_type = 'DatabaseError'
-    
-    # Detect language using Comprehend
-    try:
-        lang_response = comprehend.detect_dominant_language(Text=error_text[:500])
-        detected_lang = lang_response['Languages'][0]['LanguageCode'] if lang_response['Languages'] else 'unknown'
-    except Exception:
-        detected_lang = 'unknown'
+        if not core_message:
+            core_message = lines[0].strip()[:200]
     
     return {
         'statusCode': 200,
         'body': json.dumps({
-            'error_type': error_type,
+            'language': language,
+            'language_confidence': language_confidence,
             'stack_frames': frames,
-            'detected_language': detected_lang,
-            'raw_lines': len(error_text.splitlines())
+            'frame_count': len(frames),
+            'file_paths': list(set(file_paths)),
+            'core_message': core_message,
+            'error_type': 'unknown',  # Let LLM classify this
+            'raw_error': error_text[:500]
         })
     }
 EOF
@@ -250,15 +264,27 @@ def lambda_handler(event, context):
         if re.search(pattern, text, re.IGNORECASE):
             secrets_detected.append(secret_type)
     
-    has_sensitive = bool(pii_entities) or bool(secrets_detected)
+    has_secrets = bool(secrets_detected)
+    has_pii = bool(pii_entities)
+    
+    # Determine risk level
+    if has_secrets:
+        risk_level = 'high'
+    elif has_pii:
+        risk_level = 'medium'
+    else:
+        risk_level = 'low'
     
     return {
         'statusCode': 200,
         'body': json.dumps({
-            'has_sensitive_data': has_sensitive,
-            'pii_entities': pii_entities,
+            'risk_level': risk_level,
+            'secrets_found': len(secrets_detected),
             'secrets_detected': secrets_detected,
-            'recommendation': 'Review and redact sensitive data.' if has_sensitive else 'No sensitive data detected.'
+            'pii_found': len(pii_entities),
+            'pii_entities': pii_entities,
+            'safe_to_store': not has_secrets,
+            'recommendations': ['Review and redact sensitive data.'] if has_secrets or has_pii else []
         })
     }
 EOF

@@ -16,8 +16,8 @@ resource "aws_lambda_function" "api_proxy" {
 
   environment {
     variables = {
-      RUNTIME_ENDPOINT_ARN = aws_bedrockagentcore_agent_runtime_endpoint.main.agent_runtime_endpoint_arn
-      AWS_REGION_NAME      = local.region
+      AGENT_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.main.agent_runtime_arn
+      AWS_REGION_NAME   = local.region
     }
   }
 
@@ -41,16 +41,12 @@ import logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Get runtime endpoint ARN
-RUNTIME_ENDPOINT_ARN = os.environ.get('RUNTIME_ENDPOINT_ARN', '')
+# Get agent runtime ARN (not the endpoint ARN)
+# ARN format: arn:aws:bedrock-agentcore:region:account:agent-runtime/runtime_id
+AGENT_RUNTIME_ARN = os.environ.get('AGENT_RUNTIME_ARN', '')
 REGION = os.environ.get('AWS_REGION_NAME', os.environ.get('AWS_REGION', 'us-east-1'))
 
-# Parse runtime ID and endpoint ID from ARN
-# ARN format: arn:aws:bedrock-agentcore:region:account:agent-runtime-endpoint/endpoint_id
-ENDPOINT_ID = RUNTIME_ENDPOINT_ARN.split('/')[-1] if RUNTIME_ENDPOINT_ARN else ''
-
-logger.info(f"Runtime Endpoint ARN: {RUNTIME_ENDPOINT_ARN}")
-logger.info(f"Endpoint ID: {ENDPOINT_ID}")
+logger.info(f"Agent Runtime ARN: {AGENT_RUNTIME_ARN}")
 logger.info(f"Region: {REGION}")
 
 # Initialize the bedrock-agentcore client
@@ -105,7 +101,7 @@ def handler(event, context):
                 'body': json.dumps({'error': 'Missing error_text'})
             }
         
-        logger.info(f"Invoking AgentCore runtime endpoint: {ENDPOINT_ID}")
+        logger.info(f"Invoking AgentCore runtime: {AGENT_RUNTIME_ARN}")
         logger.info(f"Session ID: {session_id}")
         
         # Build the input for the agent supervisor
@@ -117,12 +113,15 @@ def handler(event, context):
             'session_id': session_id
         })
         
-        # Call invoke_agent_runtime
-        # Docs: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-agentcore.html
+        # Call invoke_agent_runtime with correct parameter names
+        # Valid params: contentType, accept, mcpSessionId, runtimeSessionId, mcpProtocolVersion,
+        #               runtimeUserId, traceId, traceParent, traceState, baggage, agentRuntimeArn, qualifier, payload
         response = agentcore_client.invoke_agent_runtime(
-            runtimeEndpointArn=RUNTIME_ENDPOINT_ARN,
+            agentRuntimeArn=AGENT_RUNTIME_ARN,
             payload=input_payload.encode('utf-8'),
-            sessionId=session_id
+            runtimeSessionId=session_id,
+            contentType='application/json',
+            accept='application/json'
         )
         
         logger.info(f"AgentCore response received")
@@ -161,7 +160,7 @@ def handler(event, context):
             'body': json.dumps({
                 'success': False,
                 'error': f"Validation error: {str(ve)}",
-                'endpoint': ENDPOINT_ID
+                'runtimeArn': AGENT_RUNTIME_ARN
             })
         }
     except Exception as e:
@@ -173,7 +172,7 @@ def handler(event, context):
                 'success': False,
                 'error': str(e),
                 'message': 'Failed to invoke AgentCore Runtime',
-                'endpoint': ENDPOINT_ID
+                'runtimeArn': AGENT_RUNTIME_ARN
             })
         }
 PYTHON

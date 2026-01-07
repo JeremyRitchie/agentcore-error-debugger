@@ -1010,36 +1010,38 @@ async def error_debugger(payload, context):
     """
     import traceback
     
-    # Always yield something at the start to ensure we return data
-    yield "🔍 Starting error analysis...\n"
-    
-    user_input = payload.get("prompt", "")
-    session_id = payload.get("session_id", "unknown")
-    mode = payload.get("mode", "comprehensive")  # comprehensive, quick
-    
-    # Set session context for logging
-    session_filter.set_session_id(session_id)
-    
-    logger.info(f"🚀 Error Debugger started (mode: {mode})")
-    logger.info(f"📥 Input length: {len(user_input)}")
-    logger.info(f"📥 Input preview: {user_input[:200]}...")
-    
-    if not user_input:
-        yield "❌ Error: No error text provided in 'prompt' field\n"
-        return
-    
-    # Bypass tool consent for automation
-    os.environ["BYPASS_TOOL_CONSENT"] = "true"
+    logger.info("=" * 50)
+    logger.info("🚀 Error Debugger Entrypoint Called")
+    logger.info(f"Payload: {payload}")
+    logger.info("=" * 50)
     
     try:
-        # Build prompt based on mode
+        user_input = payload.get("prompt", "") if isinstance(payload, dict) else str(payload)
+        session_id = payload.get("session_id", "unknown") if isinstance(payload, dict) else "unknown"
+        mode = payload.get("mode", "comprehensive") if isinstance(payload, dict) else "comprehensive"
+        
+        # Set session context for logging
+        session_filter.set_session_id(session_id)
+        
+        yield f"🔍 Starting error analysis...\n"
+        yield f"📋 Mode: {mode}\n"
+        
+        if not user_input:
+            yield "❌ Error: No error text provided\n"
+            return
+        
+        logger.info(f"Input: {user_input[:200]}...")
+        
+        # Bypass tool consent for automation
+        os.environ["BYPASS_TOOL_CONSENT"] = "true"
+        
+        # Build prompt
         if mode == "quick":
-            prompt = f"""Quickly analyze this error (skip external searches):
+            prompt = f"""Quickly analyze this error:
 
 ERROR: {user_input}
 
-Run: parser, security, memory search, root cause, fix.
-Focus on immediate solution, skip GitHub/StackOverflow.
+Run: parser, security, root cause, fix. Skip external searches.
 """
         else:
             prompt = f"""Comprehensively debug this error:
@@ -1047,24 +1049,18 @@ Focus on immediate solution, skip GitHub/StackOverflow.
 ERROR: {user_input}
 
 Follow the full analysis workflow with all agents.
-Search memory first, then parse, scan, research, analyze, and generate fix.
 """
         
-        yield f"📋 Mode: {mode}\n"
         yield f"🤖 Invoking supervisor agent...\n"
         
-        # Check if supervisor is initialized
         if supervisor is None:
             yield "❌ Error: Supervisor agent not initialized\n"
             return
         
-        logger.info("Starting supervisor.stream_async...")
-        event_count = 0
-        
         # Stream responses from supervisor agent
+        event_count = 0
         async for event in supervisor.stream_async(prompt):
             event_count += 1
-            logger.info(f"Event {event_count}: keys={list(event.keys()) if isinstance(event, dict) else type(event)}")
             
             if isinstance(event, dict):
                 if "data" in event:
@@ -1074,23 +1070,19 @@ Search memory first, then parse, scan, research, analyze, and generate fix.
                 elif "content" in event:
                     yield str(event["content"])
                 else:
-                    # Yield the whole event as string for debugging
-                    yield f"[Event: {json.dumps(event, default=str)[:200]}]\n"
+                    yield json.dumps(event, default=str)
             elif isinstance(event, str):
                 yield event
             else:
                 yield str(event)
         
-        if event_count == 0:
-            yield "⚠️ Warning: Supervisor produced no events\n"
-        else:
-            yield f"\n✅ Analysis complete ({event_count} events processed)\n"
+        yield f"\n✅ Analysis complete ({event_count} events)\n"
                 
     except Exception as e:
-        error_message = f"❌ Error during analysis: {str(e)}"
-        logger.error(error_message)
+        error_msg = f"❌ Error during analysis: {str(e)}"
+        logger.error(error_msg)
         logger.error(traceback.format_exc())
-        yield error_message + "\n"
+        yield error_msg + "\n"
         yield f"Stack trace:\n{traceback.format_exc()}\n"
 
 

@@ -40,6 +40,8 @@ env:
   TF_VAR_environment: ${{ vars.ENVIRONMENT || 'prod' }}
   TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-east-1' }}
   TF_VAR_feature_part: ${{ github.event.inputs.feature_part || '2' }}
+  # Container tag - use git SHA to force runtime updates
+  TF_VAR_container_tag: ${{ github.sha }}
   # API tokens for external services (optional but recommended)
   TF_VAR_github_token: ${{ secrets.GH_PAT }}
   TF_VAR_stackoverflow_api_key: ${{ secrets.STACKOVERFLOW_API_KEY }}

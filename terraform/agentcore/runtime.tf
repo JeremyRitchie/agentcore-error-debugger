@@ -84,6 +84,16 @@ resource "aws_iam_policy" "agentcore_runtime" {
         ]
       },
       {
+        Sid    = "AWSMarketplace"
+        Effect = "Allow"
+        Action = [
+          "aws-marketplace:ViewSubscriptions",
+          "aws-marketplace:Subscribe",
+          "aws-marketplace:Unsubscribe"
+        ]
+        Resource = "*"
+      },
+      {
         Sid    = "Comprehend"
         Effect = "Allow"
         Action = [
@@ -155,7 +165,8 @@ resource "aws_bedrockagentcore_agent_runtime" "main" {
 
   agent_runtime_artifact {
     container_configuration {
-      container_uri = "${data.aws_ecr_repository.agent.repository_url}:latest"
+      # Use var.container_tag (git SHA) to force update on each deploy
+      container_uri = "${data.aws_ecr_repository.agent.repository_url}:${var.container_tag}"
     }
   }
 

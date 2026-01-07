@@ -76,6 +76,13 @@ variable "session_memory_ttl_hours" {
   default     = 24
 }
 
+# Container image tag (git SHA for versioning)
+variable "container_tag" {
+  description = "Container image tag - use git SHA to force updates"
+  type        = string
+  default     = "latest"
+}
+
 # GitHub API Token (optional but recommended for higher rate limits)
 # Without a token: 60 requests/hour
 # With a token: 5000 requests/hour

@@ -43,6 +43,28 @@ import uuid
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# For Lambda streaming responses
+def stream_response(status_code, headers, body_generator):
+    """
+    Create a streaming response for Lambda Function URL.
+    body_generator should yield strings/bytes.
+    """
+    import awslambdaric.bootstrap as bootstrap
+    
+    def response_generator():
+        for chunk in body_generator:
+            if isinstance(chunk, str):
+                yield chunk.encode('utf-8')
+            else:
+                yield chunk
+    
+    return {
+        'statusCode': status_code,
+        'headers': headers,
+        'body': response_generator(),
+        'isBase64Encoded': False
+    }
+
 # Get agent runtime ARN (not the endpoint ARN)
 # ARN format: arn:aws:bedrock-agentcore:region:account:agent-runtime/runtime_id
 AGENT_RUNTIME_ARN = os.environ.get('AGENT_RUNTIME_ARN', '')
@@ -62,18 +84,28 @@ except Exception as e:
 
 def handler(event, context):
     """Proxy requests to AgentCore Runtime via invoke_agent_runtime"""
-    logger.info(f"Received event: {json.dumps(event)[:500]}")
     
     # CORS headers for all responses
     cors_headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-        'Access-Control-Allow-Methods': 'POST,OPTIONS',
+        'Access-Control-Allow-Methods': 'POST',
         'Content-Type': 'application/json'
     }
     
-    # Handle preflight
+    try:
+        logger.info(f"Received event: {json.dumps(event)[:500]}")
+    except Exception as e:
+        logger.info(f"Event logging failed: {e}")
+    
+    # Handle preflight (Lambda Function URL handles this automatically, but just in case)
     http_method = event.get('requestContext', {}).get('http', {}).get('method', '')
+    if not http_method:
+        # Try alternative path for Function URL
+        http_method = event.get('requestContext', {}).get('httpMethod', 'POST')
+    
+    logger.info(f"HTTP Method: {http_method}")
+    
     if http_method == 'OPTIONS':
         return {'statusCode': 200, 'headers': cors_headers, 'body': ''}
     
@@ -142,21 +174,73 @@ def handler(event, context):
         result_chunks = []
         
         if "text/event-stream" in content_type:
-            # Handle streaming response (SSE format)
-            logger.info("Processing streaming response (text/event-stream)...")
+            # Stream ALL events to the frontend for real-time display
+            logger.info("Streaming all agent activity to frontend...")
             response_body = response.get('response')
+            
             if response_body:
-                try:
-                    for line in response_body.iter_lines(chunk_size=1024):
-                        if line:
-                            line_text = line.decode('utf-8') if isinstance(line, bytes) else line
-                            logger.info(f"Stream line: {line_text[:200]}")
-                            # Strip "data: " prefix from SSE format
-                            if line_text.startswith('data: '):
-                                line_text = line_text[6:]
-                            result_chunks.append(line_text)
-                except Exception as stream_err:
-                    logger.error(f"Error reading stream: {stream_err}")
+                def generate_stream():
+                    event_count = 0
+                    
+                    try:
+                        for line in response_body.iter_lines(chunk_size=1024):
+                            if line:
+                                line_text = line.decode('utf-8') if isinstance(line, bytes) else line
+                                event_count += 1
+                                
+                                # Parse and enrich events for frontend
+                                if line_text.startswith('data: '):
+                                    data = line_text[6:]
+                                    
+                                    # Try to parse and categorize the event
+                                    try:
+                                        parsed = json.loads(data)
+                                        
+                                        # Add event type for frontend routing
+                                        if 'tool_use' in str(parsed) or 'toolUse' in str(parsed):
+                                            parsed['_eventType'] = 'tool_call'
+                                        elif 'tool_result' in str(parsed) or 'toolResult' in str(parsed):
+                                            parsed['_eventType'] = 'tool_result'
+                                        elif 'result' in parsed:
+                                            parsed['_eventType'] = 'final_result'
+                                        elif 'message' in parsed:
+                                            parsed['_eventType'] = 'message'
+                                        elif 'contentBlockDelta' in str(parsed):
+                                            parsed['_eventType'] = 'token'
+                                        elif 'metadata' in parsed:
+                                            parsed['_eventType'] = 'metadata'
+                                        else:
+                                            parsed['_eventType'] = 'event'
+                                        
+                                        yield f"data: {json.dumps(parsed)}\n\n"
+                                    except json.JSONDecodeError:
+                                        # Plain text event (like status messages)
+                                        yield f"data: {json.dumps({'_eventType': 'status', 'text': data})}\n\n"
+                                else:
+                                    # Non-SSE line, wrap it
+                                    yield f"data: {json.dumps({'_eventType': 'raw', 'text': line_text})}\n\n"
+                        
+                        # Send completion event
+                        yield f"data: {json.dumps({'_eventType': 'complete', 'eventCount': event_count})}\n\n"
+                        logger.info(f"Streamed {event_count} events to frontend")
+                        
+                    except Exception as stream_err:
+                        logger.error(f"Stream error: {stream_err}")
+                        yield f"data: {json.dumps({'_eventType': 'error', 'error': str(stream_err)})}\n\n"
+                
+                # Return streaming response
+                return {
+                    'statusCode': 200,
+                    'headers': {
+                        'Content-Type': 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                        'Connection': 'keep-alive',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': generate_stream()
+                }
+            else:
+                result_chunks.append('{"error": "No response body"}')
         
         elif content_type == "application/json":
             # Handle standard JSON response
@@ -273,16 +357,24 @@ def handler(event, context):
         }
     except Exception as e:
         logger.error(f"Error invoking AgentCore: {e}", exc_info=True)
-        return {
-            'statusCode': 500,
-            'headers': cors_headers,
-            'body': json.dumps({
-                'success': False,
-                'error': str(e),
-                'message': 'Failed to invoke AgentCore Runtime',
-                'runtimeArn': AGENT_RUNTIME_ARN
-            })
-        }
+        try:
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'success': False,
+                    'error': str(e),
+                    'message': 'Failed to invoke AgentCore Runtime',
+                    'runtimeArn': AGENT_RUNTIME_ARN
+                })
+            }
+        except Exception as json_err:
+            # Last resort - return plain text error
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*'},
+                'body': f'Error: {str(e)}'
+            }
 PYTHON
     filename = "index.py"
   }
@@ -347,10 +439,11 @@ resource "aws_iam_role_policy_attachment" "api_proxy" {
   policy_arn = aws_iam_policy.api_proxy.arn
 }
 
-# Lambda Function URL - supports up to 15 min timeout (no API Gateway 30s limit)
+# Lambda Function URL - supports up to 15 min timeout and response streaming
 resource "aws_lambda_function_url" "api_proxy" {
   function_name      = aws_lambda_function.api_proxy.function_name
   authorization_type = "NONE"  # Public access
+  invoke_mode        = "RESPONSE_STREAM"  # Enable streaming responses
 
   cors {
     allow_origins     = ["*"]

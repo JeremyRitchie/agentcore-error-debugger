@@ -1269,9 +1269,9 @@ async function callAgentCoreBackend(errorText) {
             sessionId: CONFIG.sessionId,
         };
         
-        addLogEntry('🚀 Calling AgentCore via API proxy...', 'agent-start');
+        addLogEntry('🚀 Streaming from AgentCore...', 'agent-start');
         
-        // Call the API proxy (Lambda handles AgentCore invocation)
+        // Call the API proxy with streaming
         const response = await fetch(`${CONFIG.apiEndpoint}/analyze`, {
             method: 'POST',
             headers: {
@@ -1285,46 +1285,24 @@ async function callAgentCoreBackend(errorText) {
             throw new Error(`API error ${response.status}: ${errorData}`);
         }
         
-        const data = await response.json();
+        // Check if streaming response
+        const contentType = response.headers.get('content-type') || '';
         
-        if (!data.success) {
-            throw new Error(data.error || 'Unknown error from AgentCore');
-        }
-        
-        // Parse the response
-        const fullResponse = data.result || '';
-        
-        // Debug logging
-        console.log('📥 AgentCore Response:', {
-            success: data.success,
-            resultLength: fullResponse.length,
-            resultPreview: fullResponse.substring(0, 500),
-            fullData: data,
-            rawText: data.rawText,
-            fullResponseObj: data.fullResponse
-        });
-        
-        // If we got fullResponse object, try to use it
-        if (data.fullResponse && typeof data.fullResponse === 'object') {
-            console.log('📦 Full response object keys:', Object.keys(data.fullResponse));
-        }
-        
-        // Process status updates from traces if available
-        if (data.traces) {
-            for (const trace of data.traces) {
-                try {
-                    processTrace(trace);
-                } catch (e) {
-                    console.warn('Failed to process trace:', e);
-                }
+        if (contentType.includes('text/event-stream')) {
+            // Handle streaming SSE response
+            result = await handleStreamingResponse(response, result);
+        } else {
+            // Handle regular JSON response (fallback)
+            const data = await response.json();
+            
+            if (!data.success) {
+                throw new Error(data.error || 'Unknown error from AgentCore');
             }
+            
+            const fullResponse = data.result || '';
+            console.log('📥 AgentCore Response (non-streaming):', { fullData: data });
+            result = parseAgentResponse(fullResponse, result);
         }
-        
-        // Parse the final response
-        result = parseAgentResponse(fullResponse, result);
-        
-        // Debug: Log parsed result
-        console.log('📊 Parsed result:', result);
         
         // Mark supervisor complete
         updateAgentStatus('supervisor', 'complete');
@@ -1340,6 +1318,175 @@ async function callAgentCoreBackend(errorText) {
         addLogEntry(`❌ Error: ${error.message}`, 'error');
         throw error;
     }
+}
+
+// Handle streaming SSE response from Lambda
+async function handleStreamingResponse(response, result) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let eventCount = 0;
+    let finalResult = null;
+    let agentActivity = [];
+    
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            // Process complete SSE events
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const dataStr = line.substring(6).trim();
+                    if (!dataStr) continue;
+                    
+                    try {
+                        const event = JSON.parse(dataStr);
+                        eventCount++;
+                        
+                        // Route based on event type
+                        processStreamEvent(event, result, agentActivity);
+                        
+                        // Capture final result
+                        if (event._eventType === 'final_result' && event.result) {
+                            finalResult = event;
+                        }
+                        
+                    } catch (e) {
+                        // Plain text status message
+                        if (dataStr && !dataStr.startsWith('{')) {
+                            addLogEntry(`📡 ${dataStr}`, 'status');
+                        }
+                    }
+                }
+            }
+        }
+        
+        console.log(`📊 Processed ${eventCount} streaming events`);
+        console.log('🔧 Agent activity:', agentActivity);
+        
+        // Parse final result if we got one
+        if (finalResult && finalResult.result) {
+            result = parseAgentResponse(
+                typeof finalResult.result === 'string' ? finalResult.result : JSON.stringify(finalResult.result),
+                result
+            );
+        }
+        
+        // Store agent activity for display
+        result.agentActivity = agentActivity;
+        
+    } catch (e) {
+        console.error('Stream reading error:', e);
+        addLogEntry(`⚠️ Stream error: ${e.message}`, 'warning');
+    }
+    
+    return result;
+}
+
+// Process individual stream events
+function processStreamEvent(event, result, agentActivity) {
+    const eventType = event._eventType || 'unknown';
+    
+    switch (eventType) {
+        case 'tool_call':
+            // Agent is calling a tool
+            const toolName = extractToolName(event);
+            if (toolName) {
+                addLogEntry(`🔧 Tool call: ${toolName}`, 'tool');
+                agentActivity.push({ type: 'tool_call', tool: toolName, timestamp: Date.now() });
+                if (state) state.toolsUsed++;
+                
+                // Activate corresponding node
+                const nodeMap = { parser: 'parser', security: 'security', context: 'context', analyze_root_cause: 'rootcause', generate_fix: 'fix' };
+                if (nodeMap[toolName]) {
+                    activateNode(`node-${nodeMap[toolName]}`);
+                    updateAgentStatus(nodeMap[toolName], 'running');
+                }
+            }
+            break;
+            
+        case 'tool_result':
+            // Tool returned a result
+            const resultTool = extractToolName(event);
+            if (resultTool) {
+                addLogEntry(`✅ Tool result: ${resultTool}`, 'tool-result');
+                agentActivity.push({ type: 'tool_result', tool: resultTool, timestamp: Date.now() });
+                
+                const nodeMap = { parser: 'parser', security: 'security', context: 'context', analyze_root_cause: 'rootcause', generate_fix: 'fix' };
+                if (nodeMap[resultTool]) {
+                    deactivateNode(`node-${nodeMap[resultTool]}`);
+                    updateAgentStatus(nodeMap[resultTool], 'complete');
+                }
+            }
+            break;
+            
+        case 'token':
+            // Streaming token (agent thinking) - update live
+            const text = extractTokenText(event);
+            if (text && text.length > 50) {
+                // Only log substantial chunks
+                addLogEntry(`💭 ${text.substring(0, 100)}...`, 'thinking');
+            }
+            break;
+            
+        case 'status':
+            addLogEntry(`📡 ${event.text || 'Status update'}`, 'status');
+            break;
+            
+        case 'message':
+            addLogEntry('📨 Agent message received', 'message');
+            agentActivity.push({ type: 'message', timestamp: Date.now() });
+            break;
+            
+        case 'metadata':
+            // Token usage, latency, etc.
+            if (event.event?.metadata?.usage) {
+                const usage = event.event.metadata.usage;
+                console.log('📊 Token usage:', usage);
+                addLogEntry(`📊 Tokens: ${usage.totalTokens || 0}`, 'metadata');
+            }
+            break;
+            
+        case 'complete':
+            addLogEntry(`✅ Stream complete (${event.eventCount} events)`, 'complete');
+            break;
+            
+        case 'error':
+            addLogEntry(`❌ ${event.error || 'Unknown error'}`, 'error');
+            break;
+    }
+}
+
+// Helper to extract tool name from event
+function extractToolName(event) {
+    // Try various paths where tool name might be
+    if (event.event?.contentBlockStart?.start?.toolUse?.name) {
+        return event.event.contentBlockStart.start.toolUse.name;
+    }
+    if (event.toolUse?.name) return event.toolUse.name;
+    if (event.tool_use?.name) return event.tool_use.name;
+    if (event.name) return event.name;
+    
+    // Search in stringified event
+    const str = JSON.stringify(event);
+    const match = str.match(/"name":\s*"([^"]+)"/);
+    return match ? match[1] : null;
+}
+
+// Helper to extract token text from event
+function extractTokenText(event) {
+    if (event.event?.contentBlockDelta?.delta?.text) {
+        return event.event.contentBlockDelta.delta.text;
+    }
+    if (event.delta?.text) return event.delta.text;
+    if (event.text) return event.text;
+    return null;
 }
 
 function processTrace(trace) {

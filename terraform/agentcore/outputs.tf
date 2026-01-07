@@ -60,9 +60,8 @@ output "frontend_config" {
     # Logs API
     logsApiEndpoint = aws_apigatewayv2_api.logs.api_endpoint
     
-    # Mode
-    demoMode = false
-    part     = var.feature_part
+    # Feature part
+    part = var.feature_part
     
     # Log groups for frontend logs viewer
     logGroups = {

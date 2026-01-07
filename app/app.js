@@ -16,8 +16,6 @@ const CONFIG = {
     logsApiEndpoint: window.AGENTCORE_CONFIG?.logsApiEndpoint || null,
     
     sessionId: 'sess_' + Math.random().toString(36).substring(2, 10),
-    // Demo mode: true unless API endpoint is configured
-    demoMode: window.AGENTCORE_CONFIG?.demoMode ?? true,
     githubRawUrl: 'https://raw.githubusercontent.com',
     githubApiUrl: 'https://api.github.com',
     // CloudWatch log groups (set by Terraform output)
@@ -239,161 +237,11 @@ function initElements() {
         memSemantic: document.getElementById('mem-semantic'),
     };
     
-    // Update mode badge
+    // Update mode badge - always LIVE (demo mode removed)
     if (els.modeBadge) {
-        if (CONFIG.demoMode) {
-            els.modeBadge.textContent = 'DEMO';
-            els.modeBadge.classList.remove('live');
-        } else {
-            els.modeBadge.textContent = 'LIVE';
-            els.modeBadge.classList.add('live');
-        }
+        els.modeBadge.textContent = 'LIVE';
+        els.modeBadge.classList.add('live');
     }
-}
-
-// ===== Simulation =====
-async function simulateAnalysis(errorText) {
-    state.startTime = Date.now();
-    state.agentsUsed = 0;
-    state.toolsUsed = 0;
-    state.fetchedFiles = {};
-    
-    // Get GitHub config from inputs (Part 2 only)
-    if (FEATURES.GITHUB_INTEGRATION_ENABLED) {
-        state.githubRepo = els.githubRepo?.value?.trim() || '';
-        state.githubBranch = els.githubBranch?.value?.trim() || 'main';
-        SecureToken.set(els.githubPat?.value?.trim() || '');
-    } else {
-        state.githubRepo = '';
-        state.githubBranch = 'main';
-    }
-    state.createdIssue = null;
-    state.createdPR = null;
-    
-    const result = {
-        parsed: null,
-        security: null,
-        memory: null,
-        context: null,
-        codeContext: null,
-        rootCause: null,
-        fix: null,
-        stats: null,
-    };
-    
-    // Activate frontend node briefly (Part 2 visualization)
-    if (FEATURES.LIVE_ARCHITECTURE_ENABLED) {
-        activateNode('node-frontend');
-        await sleep(100);
-        deactivateNode('node-frontend');
-    }
-    
-    // 1. Supervisor starts (always)
-    await runAgent('supervisor', 'Analyzing error...', 200);
-    
-    // 2. Memory search - Part 2 only
-    if (FEATURES.MEMORY_ENABLED) {
-        await runAgent('memory', 'Searching similar errors...', 300);
-        logMemoryOp('search_patterns');
-        state.toolsUsed += 1;
-        updateStats();
-        result.memory = searchMemory(errorText);
-        updateAgentOutput('memory', result.memory.count > 0 ? 
-            `Found ${result.memory.count} similar errors!` : 'No matches found');
-    }
-    
-    // 3. Parser - always enabled (Part 1 core)
-    await runAgent('parser', 'Parsing stack trace...', 400);
-    if (FEATURES.ACTIVITY_LOG_ENABLED) {
-        logToolCall('extract_stack_frames', 'Parser Lambda');
-        logToolCall('detect_language', 'Comprehend');
-    }
-    state.toolsUsed += 4;
-    updateStats();
-    result.parsed = parseError(errorText);
-    updateAgentOutput('parser', 
-        `${result.parsed.language} detected`);
-    
-    // 4. Security - always enabled (Part 1 core)
-    await runAgent('security', 'Scanning for PII/secrets...', 300);
-    if (FEATURES.ACTIVITY_LOG_ENABLED) {
-        logToolCall('detect_pii', 'Security Lambda → Comprehend');
-        logToolCall('detect_secrets', 'Security Lambda');
-    }
-    state.toolsUsed += 3;
-    updateStats();
-    result.security = scanSecurity(errorText);
-    updateAgentOutput('security', 
-        `Risk: ${result.security.riskLevel} | ${result.security.secretsFound} secrets`);
-    
-    // 5. Context Agent - Part 2 only (GitHub integration)
-    if (FEATURES.CONTEXT_AGENT_ENABLED) {
-        if (state.githubRepo && FEATURES.GITHUB_INTEGRATION_ENABLED) {
-            updateGithubStatus('loading', `Fetching code from ${state.githubRepo}...`);
-            await runAgent('context', 'Fetching code from GitHub...', 300);
-            logToolCall('fetch_code_context', 'GitHub API');
-            state.toolsUsed += 1;
-            updateStats();
-            result.codeContext = await fetchCodeFromStackTrace(errorText, result.parsed);
-            updateAgentOutput('context', 
-                `📂 ${result.codeContext.filesFound} files fetched`);
-            updateGithubStatus('connected', `✓ Connected to ${state.githubRepo}`);
-            await sleep(200);
-        }
-        
-        await runAgent('context', 'Searching GitHub Issues, StackOverflow...', 400);
-        logToolCall('search_github_issues', 'GitHub API');
-        logToolCall('search_stackoverflow', 'SO API');
-        state.toolsUsed += 2;
-        updateStats();
-        result.context = getContext(errorText, result.parsed);
-        updateAgentOutput('context', 
-            state.githubRepo 
-                ? `📂 ${result.codeContext?.filesFound || 0} files | ${result.context.stackoverflowCount} SO answers`
-                : `${result.context.githubCount} issues, ${result.context.stackoverflowCount} answers`);
-    }
-    
-    // 6. Root Cause - always enabled (Part 1 core)
-    await runAgent('rootcause', 'Analyzing root cause...', 400);
-    if (FEATURES.ACTIVITY_LOG_ENABLED) {
-        logToolCall('analyze_with_llm', 'Bedrock Claude');
-        if (FEATURES.MEMORY_ENABLED) {
-            logToolCall('match_patterns', 'AgentCore Memory');
-        }
-    }
-    state.toolsUsed += 2;
-    updateStats();
-    result.rootCause = analyzeRootCause(errorText, result.parsed, result.codeContext);
-    updateAgentOutput('rootcause', 
-        `${result.rootCause.confidence}% confidence`);
-    
-    // 7. Fix - always enabled (Part 1 core)
-    await runAgent('fix', 'Generating fix...', 500);
-    if (FEATURES.ACTIVITY_LOG_ENABLED) {
-        logToolCall('generate_code_fix', 'Bedrock Claude');
-        logToolCall('validate_syntax', 'AST Parser');
-    }
-    state.toolsUsed += 3;
-    updateStats();
-    result.fix = generateFix(result.rootCause, result.parsed.language, result.codeContext);
-    updateAgentOutput('fix', 
-        `${result.fix.fixType} | Syntax valid`);
-    
-    // 8. Stats Agent - Part 2 only
-    if (FEATURES.STATS_AGENT_ENABLED) {
-        await runAgent('stats', 'Recording statistics...', 150);
-        logToolCall('record_occurrence', 'In-memory stats');
-        state.toolsUsed += 2;
-        updateStats();
-        result.stats = recordStats(result.parsed);
-    }
-    
-    // Store in memory - Part 2 only
-    if (FEATURES.MEMORY_ENABLED) {
-        logMemoryOp('store_session_context');
-    }
-    
-    return result;
 }
 
 // ===== GitHub Integration =====
@@ -762,203 +610,6 @@ function updateStats() {
     }
 }
 
-// ===== Analysis Functions =====
-
-function searchMemory(errorText) {
-    // DEMO MODE ONLY: Return empty - real memory search is done by backend
-    // No static pattern matching - the backend LLM handles this
-    return {
-        count: 0,
-        matches: [],
-        hasSolution: false,
-        note: 'Demo mode: Memory search handled by backend in live mode'
-    };
-}
-
-function parseError(errorText) {
-    // DEMO MODE ONLY: Basic structural extraction
-    // NO static error type classification - the backend LLM handles this
-    
-    // Detect language from file extensions (structural, not semantic)
-    let language = 'unknown';
-    if (errorText.includes('.tsx') || errorText.includes('.ts')) language = 'typescript';
-    else if (errorText.includes('.js')) language = 'javascript';
-    else if (errorText.includes('.py')) language = 'python';
-    else if (errorText.includes('.go')) language = 'go';
-    else if (errorText.includes('.tf')) language = 'terraform';
-    
-    // Count frames (structural extraction only)
-    const frameCount = (errorText.match(/at\s+\w+/g) || []).length;
-    
-    return {
-        language,
-        languageConfidence: language !== 'unknown' ? 85 : 0,
-        // NO errorType - LLM will analyze this
-        frameCount,
-        coreMessage: errorText.split('\n')[0].substring(0, 100),
-        rawError: errorText.substring(0, 1000),
-        note: 'Demo mode: Full parsing done by backend in live mode'
-    };
-}
-
-function scanSecurity(errorText) {
-    let secretsFound = 0;
-    let piiFound = 0;
-    let riskLevel = 'low';
-    
-    // Check for secrets
-    if (/AKIA[0-9A-Z]{16}/.test(errorText)) secretsFound++;
-    if (/sk-[A-Za-z0-9]{48}/.test(errorText)) secretsFound++;
-    if (/password\s*=\s*['"][^'"]+['"]/i.test(errorText)) secretsFound++;
-    
-    // Check for PII
-    if (/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/.test(errorText)) piiFound++;
-    
-    if (secretsFound > 0) riskLevel = 'critical';
-    else if (piiFound > 0) riskLevel = 'medium';
-    
-    return {
-        secretsFound,
-        piiFound,
-        riskLevel,
-        safeToStore: secretsFound === 0,
-        recommendations: secretsFound > 0 ? ['Remove hardcoded secrets', 'Use environment variables'] : [],
-    };
-}
-
-function getContext(errorText, parsed) {
-    // Extract search terms from error text
-    const words = errorText.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g) || [];
-    const noise = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'in', 'on', 'for', 'to', 'of', 'at', 'line', 'file', 'error']);
-    const terms = words.filter(w => !noise.has(w.toLowerCase()) && w.length > 2).slice(0, 5);
-    const searchQuery = terms.join(' ');
-    const encodedQuery = encodeURIComponent(searchQuery);
-    
-    // Build REAL working search URLs
-    const githubSearchUrl = `https://github.com/search?q=${encodedQuery}&type=issues`;
-    const soSearchUrl = `https://stackoverflow.com/search?q=${encodedQuery}`;
-    
-    // Generate relevant resources based on error type
-    const resources = generateRelevantResources(parsed.errorType, parsed.language, encodedQuery, searchQuery);
-    
-    return {
-        githubCount: resources.github.length,
-        stackoverflowCount: resources.stackoverflow.length,
-        githubIssues: resources.github,
-        stackoverflowQuestions: resources.stackoverflow,
-        allResources: resources.all,  // Combined and ranked
-        explanation: getErrorExplanation(parsed.errorType),
-        searchUrls: {
-            github: githubSearchUrl,
-            stackoverflow: soSearchUrl
-        }
-    };
-}
-
-function generateRelevantResources(errorType, language, encodedQuery, searchQuery) {
-    const github = [];
-    const stackoverflow = [];
-    
-    // DEMO MODE ONLY: Generate search links based on error text
-    // NO static error type mapping - just create search URLs from the actual error
-    // Real search is done by backend context agent
-    
-    // Use the searchQuery passed in (already extracted from error)
-    const displayQuery = searchQuery.substring(0, 50);
-    
-    // GitHub search link
-    github.push({
-        title: `Search GitHub for: "${displayQuery}..."`,
-        url: `https://github.com/search?q=${encodedQuery}&type=issues`,
-        relevance: 80,
-        tags: ['search'],
-        source: 'github',
-        note: 'Demo mode: Real search done by backend'
-    });
-    
-    // Add language-specific search if detected
-    if (language && language !== 'unknown') {
-        github.push({
-            title: `${language} issues matching this error`,
-            url: `https://github.com/search?q=${encodedQuery}+language:${language}&type=issues`,
-            relevance: 75,
-            tags: ['language-specific'],
-            source: 'github',
-        });
-    }
-    
-    // Stack Overflow search link
-    stackoverflow.push({
-        title: `Search Stack Overflow for: "${displayQuery}..."`,
-        url: `https://stackoverflow.com/search?q=${encodedQuery}`,
-        score: 0,
-        answers: 0,
-        accepted: false,
-        relevance: 80,
-        source: 'stackoverflow',
-        note: 'Demo mode: Real search done by backend'
-    });
-    
-    // Combine
-    const all = [...github, ...stackoverflow].sort((a, b) => b.relevance - a.relevance);
-    
-    return { github, stackoverflow, all, note: 'Demo mode: Actual resources fetched by backend' };
-}
-
-function getErrorExplanation(errorType) {
-    // DEMO MODE ONLY: Return generic message
-    // Real explanation is generated by backend LLM
-    return 'Analysis pending - the backend will provide detailed explanation.';
-}
-
-function analyzeRootCause(errorText, parsed, codeContext) {
-    // DEMO MODE ONLY: Return placeholder
-    // Real root cause analysis is done by backend LLM - no static patterns
-    return {
-        rootCause: 'Root cause analysis pending - the backend LLM will analyze this error.',
-        solution: 'Solution will be generated by the backend.',
-        confidence: 0,
-        note: 'Demo mode: Actual analysis done by backend rootcause agent'
-    };
-}
-
-function generateFix(rootCause, language, codeContext) {
-    // DEMO MODE ONLY: Return placeholder
-    // Real fix generation is done by backend LLM - no static templates
-    const fix = {
-        fixType: 'pending',
-        before: '// Original code',
-        after: '// Fix will be generated by backend LLM',
-        explanation: 'Fix generation pending - the backend will analyze the error and generate a specific fix.',
-        note: 'Demo mode: Actual fix generated by backend fix agent'
-    };
-    
-    // If we have code context, include it for display
-    if (codeContext?.hasContext && codeContext.files?.length > 0) {
-        const file = codeContext.files[0];
-        fix.sourceFile = file.path;
-        fix.sourceLine = file.errorLine;
-        fix.actualCode = file.snippet;
-        fix.hasCodeContext = true;
-    }
-    
-    return fix;
-}
-
-function recordStats(parsed) {
-    state.shortTermMemory.push({
-        type: 'analyzed_error',
-        language: parsed.language,
-        timestamp: new Date().toISOString(),
-    });
-    
-    return {
-        recorded: true,
-        sessionTotal: state.shortTermMemory.length,
-        trend: 'stable',
-    };
-}
-
 // ===== Display Results =====
 
 function displayResults(result) {
@@ -975,6 +626,51 @@ function displayResults(result) {
                 <p class="result-text">Similar error found in memory. Previous solution:</p>
                 <div class="result-code">${result.memory.matches[0].solution}</div>
                 <span class="result-badge positive">×${result.memory.matches[0].successCount} successful uses</span>
+            </div>
+        `;
+    }
+    
+    // Summary section (top-level overview)
+    if (result.summary) {
+        const s = result.summary;
+        const confidenceBadge = s.rootCauseConfidence >= 80 ? 'positive' : 
+                                s.rootCauseConfidence >= 50 ? 'warning' : 'info';
+        const riskBadge = s.riskLevel === 'low' ? 'positive' : 
+                          s.riskLevel === 'critical' ? 'negative' : 'warning';
+        
+        html += `
+            <div class="result-section summary fade-in" style="background: linear-gradient(135deg, var(--card-bg) 0%, rgba(99, 102, 241, 0.1) 100%); border-left: 4px solid var(--accent-primary);">
+                <h3>📊 Analysis Summary</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 12px;">
+                    <div>
+                        <span class="result-badge info">${escapeHtml(s.language || 'unknown')}</span>
+                        <span class="result-badge ${riskBadge}">${escapeHtml(s.riskLevel || 'low')} risk</span>
+                    </div>
+                    <div>
+                        <span class="result-badge ${confidenceBadge}">${s.rootCauseConfidence || 0}% confidence</span>
+                        <span class="result-badge info">${escapeHtml(s.errorType || 'unknown')}</span>
+                    </div>
+                </div>
+                ${s.coreMessage ? `
+                    <p class="result-text" style="margin-top: 12px;">
+                        <strong>Error:</strong> <code>${escapeHtml(s.coreMessage)}</code>
+                    </p>
+                ` : ''}
+                ${s.rootCause ? `
+                    <p class="result-text" style="margin-top: 8px;">
+                        <strong>Root Cause:</strong> ${escapeHtml(s.rootCause)}
+                    </p>
+                ` : ''}
+                ${s.solution ? `
+                    <p class="result-text" style="margin-top: 8px;">
+                        <strong>Solution:</strong> ${escapeHtml(s.solution)}
+                    </p>
+                ` : ''}
+                ${s.fixExplanation ? `
+                    <p class="result-text" style="margin-top: 8px; font-style: italic; opacity: 0.9;">
+                        💡 ${escapeHtml(s.fixExplanation)}
+                    </p>
+                ` : ''}
             </div>
         `;
     }
@@ -1194,17 +890,9 @@ async function runAnalysis() {
     els.resultsContent.innerHTML = '<div class="loading">Analyzing error...</div>';
     
     try {
-        let result;
-        
-        if (CONFIG.demoMode) {
-            // Demo mode: run local simulation
-            addLogEntry('Running in DEMO mode (local simulation)', 'info');
-            result = await simulateAnalysis(errorText);
-        } else {
-            // Live mode: call real AgentCore backend
-            addLogEntry('Calling AgentCore backend...', 'agent-start');
-            result = await callAgentCoreBackend(errorText);
-        }
+        // Call the real AgentCore backend
+        addLogEntry('Calling AgentCore backend...', 'agent-start');
+        const result = await callAgentCoreBackend(errorText);
         
         displayResults(result);
         updateMemoryDisplay();
@@ -1221,7 +909,7 @@ async function runAnalysis() {
                 <h3>❌ Analysis Failed</h3>
                 <p class="result-text">${escapeHtml(error.message)}</p>
                 <p class="result-text hint" style="margin-top: 8px; font-size: 0.75rem;">
-                    ${CONFIG.demoMode ? 'Running in demo mode.' : 'Check the CloudWatch logs for more details.'}
+                    Check the CloudWatch logs for more details.
                 </p>
             </div>
         `;
@@ -1357,12 +1045,24 @@ async function callAgentCoreBackend(errorText) {
             }
             
             if (data.agents.security) {
-                // Support both count and boolean formats
-                const secretsFound = data.agents.security.secrets_found || 
-                                     (data.agents.security.secrets_detected ? 1 : 0);
-                const piiFound = data.agents.security.pii_found || 
-                                 (Array.isArray(data.agents.security.pii_found) ? data.agents.security.pii_found.length : 0) ||
-                                 (data.agents.security.pii_detected ? 1 : 0);
+                // Support both count (number) and array formats
+                let secretsFound = 0;
+                if (typeof data.agents.security.secrets_found === 'number') {
+                    secretsFound = data.agents.security.secrets_found;
+                } else if (Array.isArray(data.agents.security.secrets_found)) {
+                    secretsFound = data.agents.security.secrets_found.length;
+                } else if (data.agents.security.secrets_detected) {
+                    secretsFound = 1;
+                }
+                
+                let piiFound = 0;
+                if (typeof data.agents.security.pii_found === 'number') {
+                    piiFound = data.agents.security.pii_found;
+                } else if (Array.isArray(data.agents.security.pii_found)) {
+                    piiFound = data.agents.security.pii_found.length;
+                } else if (data.agents.security.pii_detected) {
+                    piiFound = 1;
+                }
                 
                 result.security = {
                     riskLevel: data.agents.security.risk_level || 'low',
@@ -1370,7 +1070,7 @@ async function callAgentCoreBackend(errorText) {
                     piiFound: piiFound,
                     safeToStore: data.agents.security.safe_to_store !== false,
                     recommendations: data.agents.security.recommendations || [],
-                    analysis: data.agents.security.analysis || '',
+                    analysis: data.agents.security.analysis || data.agents.security.notes || '',
                     rawData: data.agents.security
                 };
                 updateAgentStatus('security', 'complete');
@@ -1381,15 +1081,25 @@ async function callAgentCoreBackend(errorText) {
                 const soData = data.agents.context.stackoverflow_answers || data.agents.context.stackoverflow_questions || [];
                 const ghData = data.agents.context.github_issues || [];
                 
+                // Generate search query from error message
+                const errorInput = els.errorInput?.value || '';
+                const coreMessage = data.agents.parser?.core_message || data.agents.parser?.error_message || '';
+                const language = data.agents.parser?.language || '';
+                
+                // Build a smart search query
+                const searchTerms = (coreMessage || errorInput.split('\n')[0]).substring(0, 80);
+                const encodedQuery = encodeURIComponent(searchTerms);
+                const langQuery = language && language !== 'unknown' ? `+${language}` : '';
+                
                 // Normalize resources with source field for display
-                const allResources = [
-                    ...ghData.map((r, i) => ({
+                let allResources = [
+                    ...ghData.filter(r => !r.error).map((r, i) => ({
                         ...r,
                         source: 'github',
                         relevance: r.relevance || (100 - i * 10),
                         tags: r.labels || [],
                     })),
-                    ...soData.map((r, i) => ({
+                    ...soData.filter(r => !r.error).map((r, i) => ({
                         ...r,
                         source: 'stackoverflow',
                         relevance: r.relevance || (90 - i * 10),
@@ -1398,19 +1108,56 @@ async function callAgentCoreBackend(errorText) {
                     }))
                 ];
                 
-                // Generate search URLs from the error text
-                const searchQuery = encodeURIComponent(els.errorInput?.value?.substring(0, 100) || 'error');
+                // If no results from backend, generate helpful search links
+                if (allResources.length === 0 && searchTerms) {
+                    allResources = [
+                        {
+                            title: `Search GitHub for: "${searchTerms.substring(0, 40)}..."`,
+                            url: `https://github.com/search?q=${encodedQuery}${langQuery}&type=issues`,
+                            source: 'github',
+                            relevance: 85,
+                            tags: ['search'],
+                            isSearchLink: true
+                        },
+                        {
+                            title: `Search Stack Overflow for this error`,
+                            url: `https://stackoverflow.com/search?q=${encodedQuery}`,
+                            source: 'stackoverflow',
+                            relevance: 80,
+                            answers: 0,
+                            accepted: false,
+                            isSearchLink: true
+                        }
+                    ];
+                    
+                    // Add language-specific search if detected
+                    if (language && language !== 'unknown') {
+                        allResources.push({
+                            title: `${language} questions about this error`,
+                            url: `https://stackoverflow.com/search?q=${encodedQuery}+[${language}]`,
+                            source: 'stackoverflow',
+                            relevance: 75,
+                            answers: 0,
+                            accepted: false,
+                            isSearchLink: true
+                        });
+                    }
+                }
                 
                 result.context = {
-                    githubCount: ghData.length,
-                    stackoverflowCount: soData.length,
+                    githubCount: ghData.filter(r => !r.error).length,
+                    stackoverflowCount: soData.filter(r => !r.error).length,
                     allResources: allResources,
                     explanation: data.agents.context.summary?.recommended_approach || 
                                  data.agents.context.explanation || 
-                                 (allResources.length > 0 ? `Found ${allResources.length} relevant resources` : 'No external resources found'),
+                                 (allResources.length > 0 
+                                     ? (allResources[0]?.isSearchLink 
+                                         ? 'Search these resources for solutions:' 
+                                         : `Found ${allResources.length} relevant resources`)
+                                     : 'No external resources found'),
                     searchUrls: {
-                        github: `https://github.com/search?q=${searchQuery}&type=issues`,
-                        stackoverflow: `https://stackoverflow.com/search?q=${searchQuery}`
+                        github: `https://github.com/search?q=${encodedQuery}${langQuery}&type=issues`,
+                        stackoverflow: `https://stackoverflow.com/search?q=${encodedQuery}`
                     },
                     rawData: data.agents.context
                 };
@@ -1501,19 +1248,33 @@ async function callAgentCoreBackend(errorText) {
             }
         }
         
-        // Only parse the result text as fallback if we don't have structured agent data
-        // This avoids overwriting correctly parsed agent data with markdown-extracted values
+        // Log whether we have structured agent data
         const hasStructuredAgentData = data.agents && (
             data.agents.parser || 
             data.agents.rootcause || 
             data.agents.fix
         );
+        console.log(hasStructuredAgentData 
+            ? '✅ Using structured agent data' 
+            : '⚠️ No structured agent data received');
         
-        if (!hasStructuredAgentData && data.result && typeof data.result === 'string') {
-            console.log('⚠️ No structured agent data, falling back to markdown parsing');
-            result = parseAgentResponse(data.result, result);
-        } else if (hasStructuredAgentData) {
-            console.log('✅ Using structured agent data (skipping markdown parsing)');
+        // Count agents and tools from the response
+        if (data.agents) {
+            const agentKeys = ['parser', 'security', 'context', 'rootcause', 'fix', 'memory', 'stats'];
+            let agentCount = 0;
+            for (const key of agentKeys) {
+                if (data.agents[key] && Object.keys(data.agents[key]).length > 0) {
+                    agentCount++;
+                }
+            }
+            // Add supervisor as always running
+            state.agentsUsed = agentCount + 1; // +1 for supervisor
+            
+            // Estimate tool calls from eventCount (roughly 1 tool call per ~500 events)
+            // Or use explicit count if available
+            state.toolsUsed = Math.max(agentCount * 2, Math.floor((data.eventCount || 0) / 500));
+            
+            console.log(`📊 Agents used: ${state.agentsUsed}, Tool calls: ${state.toolsUsed}`);
         }
         
         // Store raw response for debugging
@@ -1624,56 +1385,6 @@ function updateStreamingResults(content) {
             `;
         }
     }
-}
-
-function parseAgentResponse(responseText, defaultResult) {
-    // Remove status markers
-    const cleanResponse = responseText.replace(/\[\[STATUS:.*?\]\]/g, '');
-    
-    // Try to extract structured data from the response
-    const result = { ...defaultResult };
-    
-    // Extract language
-    const langMatch = cleanResponse.match(/\*\*Language\*\*:\s*(\w+)/i) || 
-                      cleanResponse.match(/Language:\s*(\w+)/i);
-    if (langMatch) {
-        result.parsed.language = langMatch[1].toLowerCase();
-        result.parsed.languageConfidence = 85;
-    }
-    
-    // Extract error type
-    const typeMatch = cleanResponse.match(/\*\*Error Type\*\*:\s*(\w+)/i) ||
-                      cleanResponse.match(/Error Type:\s*(\w+)/i) ||
-                      cleanResponse.match(/\*\*Type\*\*:\s*(\w+)/i);
-    if (typeMatch) {
-        result.parsed.errorType = typeMatch[1].toLowerCase();
-    }
-    
-    // Extract confidence
-    const confMatch = cleanResponse.match(/\*\*Confidence\*\*:\s*(\d+)/i) ||
-                      cleanResponse.match(/Confidence:\s*(\d+)/i);
-    if (confMatch) {
-        result.rootCause.confidence = parseInt(confMatch[1]);
-    }
-    
-    // Extract root cause
-    const rootCauseMatch = cleanResponse.match(/### 🎯 Root Cause\s*\n([\s\S]*?)(?=\n###|\n##|$)/i) ||
-                           cleanResponse.match(/\*\*Root Cause\*\*:\s*([^\n]+)/i);
-    if (rootCauseMatch) {
-        result.rootCause.rootCause = rootCauseMatch[1].trim();
-    }
-    
-    // Extract fix code
-    const fixMatch = cleanResponse.match(/```(\w+)?\n([\s\S]*?)```/);
-    if (fixMatch) {
-        result.fix.after = fixMatch[2].trim();
-        result.fix.fixType = 'code_fix';
-    }
-    
-    // Store the raw response for display
-    result.rawResponse = cleanResponse;
-    
-    return result;
 }
 
 // ===== Utilities =====
@@ -1924,12 +1635,8 @@ const LogsManager = {
         this.showLoading();
         
         try {
-            // In demo mode, generate simulated logs
-            if (CONFIG.demoMode) {
-                await this.fetchSimulatedLogs();
-            } else {
-                await this.fetchCloudWatchLogs();
-            }
+            // Fetch real CloudWatch logs
+            await this.fetchCloudWatchLogs();
             
             state.logs.lastFetch = new Date();
             this.setStatus('success', `Updated ${state.logs.lastFetch.toLocaleTimeString()}`);
@@ -1944,10 +1651,16 @@ const LogsManager = {
     },
     
     async fetchCloudWatchLogs() {
-        // If no logs API endpoint configured, fall back to simulated
+        // If no logs API endpoint configured, show error
         if (!CONFIG.logsApiEndpoint) {
-            console.log('No logs API endpoint configured, using simulated logs');
-            return this.fetchSimulatedLogs();
+            console.warn('No logs API endpoint configured');
+            state.logs.entries = [{
+                timestamp: Date.now(),
+                component: 'system',
+                level: 'WARN',
+                message: 'Logs API endpoint not configured. Deploy the application to enable logs.'
+            }];
+            return;
         }
         
         // Call the backend API to fetch CloudWatch logs
@@ -1978,72 +1691,6 @@ const LogsManager = {
         if (data.errors?.length > 0) {
             console.warn('Some log fetches failed:', data.errors);
         }
-    },
-    
-    async fetchSimulatedLogs() {
-        // Simulate network delay
-        await new Promise(r => setTimeout(r, 500));
-        
-        // Generate simulated logs based on current analysis state
-        const now = Date.now();
-        const logs = [];
-        
-        const components = ['runtime', 'gateway', 'memory', 'parser', 'security', 'context', 'stats'];
-        const levels = ['INFO', 'INFO', 'INFO', 'WARN', 'ERROR'];
-        
-        // If we've run an analysis, generate logs for that
-        if (state.shortTermMemory.length > 0) {
-            const analysis = state.shortTermMemory[state.shortTermMemory.length - 1];
-            
-            logs.push(
-                { timestamp: now - 5000, component: 'runtime', level: 'INFO', message: 'Received analysis request' },
-                { timestamp: now - 4800, component: 'runtime', level: 'INFO', message: '🚀 Error Debugger started (mode: comprehensive)' },
-                { timestamp: now - 4600, component: 'runtime', level: 'INFO', message: `📥 Input: ${analysis.language} error received` },
-                { timestamp: now - 4400, component: 'parser', level: 'INFO', message: `Parsing error text (${Math.floor(Math.random() * 500 + 100)} chars)` },
-                { timestamp: now - 4200, component: 'parser', level: 'INFO', message: `✅ Detected language: ${analysis.language}` },
-                { timestamp: now - 4000, component: 'security', level: 'INFO', message: 'Scanning for PII and secrets...' },
-                { timestamp: now - 3800, component: 'security', level: 'INFO', message: '✅ Security scan complete - no sensitive data found' },
-                { timestamp: now - 3500, component: 'runtime', level: 'INFO', message: '🎯 Invoking RootCauseAgent' },
-                { timestamp: now - 3200, component: 'runtime', level: 'INFO', message: `✅ RootCauseAgent returned: 85% confidence` },
-                { timestamp: now - 3000, component: 'runtime', level: 'INFO', message: `🔧 Invoking FixAgent for ${analysis.language}` },
-                { timestamp: now - 2700, component: 'runtime', level: 'INFO', message: '✅ FixAgent returned fix' },
-                { timestamp: now - 2500, component: 'stats', level: 'INFO', message: `Recording ${analysis.language} error occurrence` },
-                { timestamp: now - 2300, component: 'runtime', level: 'INFO', message: 'Analysis complete, streaming response' },
-            );
-        }
-        
-        // Add some background noise logs
-        for (let i = 0; i < 15; i++) {
-            const component = components[Math.floor(Math.random() * components.length)];
-            const level = levels[Math.floor(Math.random() * levels.length)];
-            const offset = Math.floor(Math.random() * 60000);
-            
-            const messages = {
-                runtime: ['Heartbeat check', 'Memory usage: 245MB', 'Active sessions: 1', 'Tool execution complete'],
-                gateway: ['MCP request received', 'Routing to Lambda', 'Tool invocation complete', 'Response streaming'],
-                memory: ['Semantic search initiated', 'Found 3 matching patterns', 'Context stored', 'Session updated'],
-                parser: ['Regex pattern matched', 'Stack frame extracted', 'Language detected', 'Classification complete'],
-                security: ['PII scan started', 'No secrets found', 'Risk level: low', 'Scan complete'],
-                context: ['GitHub API call', 'StackOverflow search', 'Results cached', 'Context retrieved'],
-                stats: ['Stats recorded', 'DynamoDB write', 'Trend calculated', 'Frequency updated'],
-            };
-            
-            const componentMessages = messages[component] || ['Processing...'];
-            const message = componentMessages[Math.floor(Math.random() * componentMessages.length)];
-            
-            logs.push({
-                timestamp: now - offset,
-                component,
-                level,
-                message: level === 'ERROR' ? `❌ ${message} failed` : 
-                         level === 'WARN' ? `⚠️ ${message} (warning)` : message,
-            });
-        }
-        
-        // Sort by timestamp descending (newest first)
-        logs.sort((a, b) => b.timestamp - a.timestamp);
-        
-        state.logs.entries = logs;
     },
     
     parseCloudWatchLogs(rawLogs) {
@@ -2176,12 +1823,11 @@ const LogsManager = {
 // ===== Initialization =====
 
 function applyFeatureFlags() {
-    // Update part badge in header
+    // Update part badge in header - always LIVE
     if (els.modeBadge) {
         const partText = FEATURES.PART === 1 ? 'PART 1' : 'PART 2';
-        const modeText = CONFIG.demoMode ? 'DEMO' : 'LIVE';
-        els.modeBadge.textContent = `${partText} • ${modeText}`;
-        els.modeBadge.classList.toggle('live', !CONFIG.demoMode);
+        els.modeBadge.textContent = `${partText} • LIVE`;
+        els.modeBadge.classList.add('live');
     }
     
     // Hide Part 2 features if Part 1

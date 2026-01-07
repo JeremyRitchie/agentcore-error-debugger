@@ -20,7 +20,7 @@ import json
 import logging
 from datetime import datetime
 from strands import Agent, tool
-# BedrockModel not needed - using Strands default
+from strands.models import BedrockModel
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 # ============================================================================
@@ -993,14 +993,11 @@ def build_tools_list():
     
     return tools
 
-# Create supervisor - uses Strands default model (Sonnet 4)
 supervisor = Agent(
     system_prompt=SUPERVISOR_PROMPT,
     tools=build_tools_list(),
     callback_handler=event_loop_tracker
 )
-
-logger.info("🤖 Supervisor initialized with default Strands model")
 
 # ============================================================================
 # AgentCore Runtime Entrypoint
@@ -1022,10 +1019,10 @@ async def error_debugger(payload, context):
         user_input = payload.get("prompt", "") if isinstance(payload, dict) else str(payload)
         session_id = payload.get("session_id", "unknown") if isinstance(payload, dict) else "unknown"
         mode = payload.get("mode", "comprehensive") if isinstance(payload, dict) else "comprehensive"
-    
-    # Set session context for logging
-    session_filter.set_session_id(session_id)
-    
+        
+        # Set session context for logging
+        session_filter.set_session_id(session_id)
+        
         yield f"🔍 Starting error analysis...\n"
         yield f"📋 Mode: {mode}\n"
         
@@ -1034,10 +1031,10 @@ async def error_debugger(payload, context):
             return
         
         logger.info(f"Input: {user_input[:200]}...")
-    
-    # Bypass tool consent for automation
-    os.environ["BYPASS_TOOL_CONSENT"] = "true"
-    
+        
+        # Bypass tool consent for automation
+        os.environ["BYPASS_TOOL_CONSENT"] = "true"
+        
         # Build prompt
         if mode == "quick":
             prompt = f"""Quickly analyze this error:
@@ -1066,8 +1063,8 @@ Follow the full analysis workflow with all agents.
             event_count += 1
             
             if isinstance(event, dict):
-            if "data" in event:
-                yield event["data"]
+                if "data" in event:
+                    yield event["data"]
                 elif "text" in event:
                     yield event["text"]
                 elif "content" in event:

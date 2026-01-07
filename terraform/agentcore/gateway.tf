@@ -47,7 +47,9 @@ resource "aws_iam_policy" "agentcore_gateway" {
         ]
         Resource = [
           aws_lambda_function.parser.arn,
-          aws_lambda_function.security.arn
+          aws_lambda_function.security.arn,
+          aws_lambda_function.context.arn,
+          aws_lambda_function.stats.arn
         ]
       }
     ]
@@ -71,11 +73,13 @@ resource "aws_cloudwatch_log_group" "gateway" {
 
 # AgentCore Gateway
 # Note: Logging must be configured manually in AWS Console pointing to the log group above
+# Note: Using NONE authorizer for internal Runtime->Gateway calls
+#       The Runtime already authenticates callers via Cognito/IAM at the endpoint level
 resource "aws_bedrockagentcore_gateway" "main" {
   name            = "${local.resource_prefix}-gateway"
   description     = "Error Debugger - MCP Gateway"
   protocol_type   = "MCP"
-  authorizer_type = "AWS_IAM"
+  authorizer_type = "NONE"
   role_arn        = aws_iam_role.agentcore_gateway.arn
 
   tags = {

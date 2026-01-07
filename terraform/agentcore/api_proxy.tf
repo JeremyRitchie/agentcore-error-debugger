@@ -41,21 +41,29 @@ import logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Parse endpoint ID from ARN
-# ARN format: arn:aws:bedrock-agentcore:region:account:agent-runtime-endpoint/id
+# Get runtime endpoint ARN
 RUNTIME_ENDPOINT_ARN = os.environ.get('RUNTIME_ENDPOINT_ARN', '')
+REGION = os.environ.get('AWS_REGION_NAME', os.environ.get('AWS_REGION', 'us-east-1'))
+
+# Parse runtime ID and endpoint ID from ARN
+# ARN format: arn:aws:bedrock-agentcore:region:account:agent-runtime-endpoint/endpoint_id
 ENDPOINT_ID = RUNTIME_ENDPOINT_ARN.split('/')[-1] if RUNTIME_ENDPOINT_ARN else ''
 
-# Initialize AgentCore client
+logger.info(f"Runtime Endpoint ARN: {RUNTIME_ENDPOINT_ARN}")
+logger.info(f"Endpoint ID: {ENDPOINT_ID}")
+logger.info(f"Region: {REGION}")
+
+# Initialize the bedrock-agentcore client
+# Docs: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-agentcore.html
 agentcore_client = None
 try:
-    agentcore_client = boto3.client('bedrock-agent-runtime')
-    logger.info(f"AgentCore client initialized for endpoint: {ENDPOINT_ID}")
+    agentcore_client = boto3.client('bedrock-agentcore', region_name=REGION)
+    logger.info("✅ bedrock-agentcore client initialized")
 except Exception as e:
-    logger.error(f"Failed to init AgentCore client: {e}")
+    logger.error(f"Failed to init bedrock-agentcore client: {e}")
 
 def handler(event, context):
-    """Proxy requests to AgentCore Runtime"""
+    """Proxy requests to AgentCore Runtime via invoke_agent_runtime"""
     logger.info(f"Received event: {json.dumps(event)[:500]}")
     
     # CORS headers for all responses
@@ -67,8 +75,16 @@ def handler(event, context):
     }
     
     # Handle preflight
-    if event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
+    http_method = event.get('requestContext', {}).get('http', {}).get('method', '')
+    if http_method == 'OPTIONS':
         return {'statusCode': 200, 'headers': cors_headers, 'body': ''}
+    
+    if not agentcore_client:
+        return {
+            'statusCode': 500,
+            'headers': cors_headers,
+            'body': json.dumps({'error': 'AgentCore client not initialized'})
+        }
     
     try:
         # Parse request body
@@ -78,61 +94,86 @@ def handler(event, context):
             body = base64.b64decode(body).decode('utf-8')
         
         request = json.loads(body) if isinstance(body, str) else body
-        input_text = request.get('inputText', request.get('error_text', ''))
+        error_text = request.get('error_text', request.get('inputText', ''))
         session_id = request.get('sessionId', 'default')
+        github_repo = request.get('github_repo', '')
         
-        if not input_text:
+        if not error_text:
             return {
                 'statusCode': 400,
                 'headers': cors_headers,
-                'body': json.dumps({'error': 'Missing inputText or error_text'})
+                'body': json.dumps({'error': 'Missing error_text'})
             }
         
-        logger.info(f"Invoking AgentCore endpoint {ENDPOINT_ID} with session {session_id}")
+        logger.info(f"Invoking AgentCore runtime endpoint: {ENDPOINT_ID}")
+        logger.info(f"Session ID: {session_id}")
         
-        # Call AgentCore Runtime
-        # Note: The exact API depends on how AgentCore exposes the runtime
-        # This uses the bedrock-agent-runtime client which may need adjustment
-        response = agentcore_client.invoke_agent(
-            agentId=ENDPOINT_ID,
-            agentAliasId='TSTALIASID',  # Default test alias
-            sessionId=session_id,
-            inputText=input_text,
-            enableTrace=True
+        # Build the input for the agent supervisor
+        # The supervisor expects a JSON payload with action and error details
+        input_payload = json.dumps({
+            'action': 'analyze',
+            'error_text': error_text,
+            'github_repo': github_repo,
+            'session_id': session_id
+        })
+        
+        # Call invoke_agent_runtime
+        # Docs: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-agentcore.html
+        response = agentcore_client.invoke_agent_runtime(
+            runtimeEndpointArn=RUNTIME_ENDPOINT_ARN,
+            payload=input_payload.encode('utf-8'),
+            sessionId=session_id
         )
         
-        # Collect streaming response
-        result_text = ""
-        traces = []
+        logger.info(f"AgentCore response received")
         
-        for event_chunk in response.get('completion', []):
-            if 'chunk' in event_chunk:
-                chunk_data = event_chunk['chunk']
-                if 'bytes' in chunk_data:
-                    result_text += chunk_data['bytes'].decode('utf-8')
-            if 'trace' in event_chunk:
-                traces.append(event_chunk['trace'])
+        # Read the response payload
+        result_bytes = response.get('payload', b'')
+        if hasattr(result_bytes, 'read'):
+            result_bytes = result_bytes.read()
+        
+        result_text = result_bytes.decode('utf-8') if isinstance(result_bytes, bytes) else str(result_bytes)
+        
+        logger.info(f"Response (first 500 chars): {result_text[:500]}")
+        
+        # Try to parse as JSON
+        try:
+            result_json = json.loads(result_text)
+        except json.JSONDecodeError:
+            result_json = {'result': result_text}
         
         return {
             'statusCode': 200,
             'headers': cors_headers,
             'body': json.dumps({
                 'success': True,
-                'result': result_text,
-                'traces': traces,
+                'result': result_json.get('result', result_text),
+                'traces': result_json.get('traces', []),
                 'sessionId': session_id
             })
         }
         
+    except agentcore_client.exceptions.ValidationException as ve:
+        logger.error(f"Validation error: {ve}")
+        return {
+            'statusCode': 400,
+            'headers': cors_headers,
+            'body': json.dumps({
+                'success': False,
+                'error': f"Validation error: {str(ve)}",
+                'endpoint': ENDPOINT_ID
+            })
+        }
     except Exception as e:
-        logger.error(f"Error invoking AgentCore: {e}")
+        logger.error(f"Error invoking AgentCore: {e}", exc_info=True)
         return {
             'statusCode': 500,
             'headers': cors_headers,
             'body': json.dumps({
                 'success': False,
                 'error': str(e),
-                'message': 'Failed to invoke AgentCore Runtime'
+                'message': 'Failed to invoke AgentCore Runtime',
+                'endpoint': ENDPOINT_ID
             })
         }
 PYTHON

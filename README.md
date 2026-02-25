@@ -3,8 +3,8 @@
 Paste in a stack trace, get back the root cause and a working fix. A Supervisor agent orchestrates specialist agents, each doing one job well.
 
 Built for a two-part blog series:
-- [Part 1: Building a Multi-Agent Error Debugger](https://jeremyritchie.com/posts/20) — Parser, Security, Root Cause, Fix
-- [Part 2: Memory, Context, and Integrations](https://jeremyritchie.com/posts/21) — AgentCore Memory, GitHub/SO context, stats tracking
+- [Part 1: Building a Multi-Agent Error Debugger with AWS Bedrock AgentCore](https://jeremyritchie.com/posts/20) — Parser, Security, Root Cause, Fix
+- [Part 2: Adding Memory, Context, and GitHub Integration to AgentCore](https://jeremyritchie.com/posts/21) — AgentCore Memory, GitHub/SO context, stats tracking
 
 ## Architecture
 

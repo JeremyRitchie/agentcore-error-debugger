@@ -1165,7 +1165,12 @@ Should I continue gathering info or am I ready to conclude?
    - Must address the identified root cause
    - If the fix seems generic or wrong, reconsider
 
-7. **RECORD** stats and optionally store pattern for future
+## Phase 5: Learn and Record (ALWAYS do this)
+
+7. **STORE PATTERN** in memory - ALWAYS call `store_pattern` with the error type, a signature, root cause, solution, and language.
+   This is how the system LEARNS. Future analyses will find this pattern via `search_memory`.
+
+8. **RECORD STATS** - call `record_stats` to track this error type
 
 # ITERATION EXAMPLES
 
@@ -1244,6 +1249,9 @@ When you are CONFIDENT (≥80%), produce the final output:
 4. **RE-RUN IF NEEDED** - Low confidence? Gather more info.
 5. **BE SPECIFIC** - Generic answers are useless
 6. **USE REAL DATA** - Only include URLs/info that came from tools
+7. **ALWAYS USE MEMORY** - ALWAYS call `search_memory` early to check for known solutions.
+   ALWAYS call `store_pattern` at the end to save what you learned. This is how you get smarter over time.
+   The memory system is a core differentiator — use it every single time.
 """
 
 # Select the correct prompt based on feature part

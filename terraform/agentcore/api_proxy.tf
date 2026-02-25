@@ -25,6 +25,14 @@ resource "aws_lambda_function" "api_proxy" {
   tags = {
     Name = "${local.resource_prefix}-api-proxy"
   }
+
+  depends_on = [aws_iam_role_policy_attachment.api_proxy, aws_cloudwatch_log_group.api_proxy]
+}
+
+resource "aws_cloudwatch_log_group" "api_proxy" {
+  name              = "/aws/lambda/${local.resource_prefix}-api-proxy"
+  retention_in_days = 14
+  tags              = { Name = "${local.resource_prefix}-api-proxy-logs" }
 }
 
 # Lambda code

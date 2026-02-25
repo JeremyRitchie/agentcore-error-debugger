@@ -39,13 +39,15 @@ output "gateway_endpoint" {
 output "log_groups" {
   description = "CloudWatch log group names for all components"
   value = {
-    runtime  = aws_cloudwatch_log_group.agentcore.name
-    gateway  = aws_cloudwatch_log_group.gateway.name
-    memory   = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : null
-    parser   = aws_cloudwatch_log_group.parser.name
-    security = aws_cloudwatch_log_group.security.name
-    context  = aws_cloudwatch_log_group.context.name
-    stats    = aws_cloudwatch_log_group.stats.name
+    runtime   = aws_cloudwatch_log_group.agentcore.name
+    gateway   = aws_cloudwatch_log_group.gateway.name
+    memory    = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : null
+    api_proxy = aws_cloudwatch_log_group.api_proxy.name
+    logs      = aws_cloudwatch_log_group.logs_lambda.name
+    parser    = aws_cloudwatch_log_group.parser.name
+    security  = aws_cloudwatch_log_group.security.name
+    context   = aws_cloudwatch_log_group.context.name
+    stats     = aws_cloudwatch_log_group.stats.name
   }
 }
 
@@ -65,13 +67,15 @@ output "frontend_config" {
     
     # Log groups for frontend logs viewer
     logGroups = {
-      runtime  = aws_cloudwatch_log_group.agentcore.name
-      gateway  = aws_cloudwatch_log_group.gateway.name
-      memory   = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : null
-      parser   = aws_cloudwatch_log_group.parser.name
-      security = aws_cloudwatch_log_group.security.name
-      context  = aws_cloudwatch_log_group.context.name
-      stats    = aws_cloudwatch_log_group.stats.name
+      runtime   = aws_cloudwatch_log_group.agentcore.name
+      gateway   = aws_cloudwatch_log_group.gateway.name
+      memory    = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : null
+      api_proxy = aws_cloudwatch_log_group.api_proxy.name
+      logs      = aws_cloudwatch_log_group.logs_lambda.name
+      parser    = aws_cloudwatch_log_group.parser.name
+      security  = aws_cloudwatch_log_group.security.name
+      context   = aws_cloudwatch_log_group.context.name
+      stats     = aws_cloudwatch_log_group.stats.name
     }
   }
 }

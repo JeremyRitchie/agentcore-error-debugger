@@ -18,15 +18,17 @@ const CONFIG = {
     sessionId: 'sess_' + Math.random().toString(36).substring(2, 10),
     githubRawUrl: 'https://raw.githubusercontent.com',
     githubApiUrl: 'https://api.github.com',
-    // CloudWatch log groups (set by Terraform output)
+    // CloudWatch log groups (set by Terraform output via config.js)
     logGroups: window.AGENTCORE_CONFIG?.logGroups || {
-        runtime:  '/aws/bedrock-agentcore/error-debugger',
-        gateway:  '/aws/bedrock-agentcore/error-debugger-gateway',
-        memory:   '/aws/bedrock-agentcore/error-debugger-memory',
-        parser:   '/aws/lambda/error-debugger-parser',
-        security: '/aws/lambda/error-debugger-security',
-        context:  '/aws/lambda/error-debugger-context',
-        stats:    '/aws/lambda/error-debugger-stats',
+        runtime:   '/aws/bedrock-agentcore/error-debugger-prod',
+        gateway:   '/aws/bedrock-agentcore/error-debugger-prod-gateway',
+        memory:    '/aws/bedrock-agentcore/error-debugger-prod-memory',
+        api_proxy: '/aws/lambda/error-debugger-prod-api-proxy',
+        logs:      '/aws/lambda/error-debugger-prod-logs',
+        parser:    '/aws/lambda/error-debugger-prod-parser',
+        security:  '/aws/lambda/error-debugger-prod-security',
+        context:   '/aws/lambda/error-debugger-prod-context',
+        stats:     '/aws/lambda/error-debugger-prod-stats',
     },
     // AWS Region
     awsRegion: window.AGENTCORE_CONFIG?.region || 'us-east-1',
@@ -824,30 +826,38 @@ function displayResults(result) {
 // ===== Memory Display =====
 
 function updateMemoryDisplay() {
-    // Short-term
+    // Short-term (current session context)
     if (state.shortTermMemory.length > 0) {
         els.shortTermList.innerHTML = state.shortTermMemory.map(m => `
             <div class="memory-item">
                 <div class="memory-item-header">
-                    <span class="memory-item-type">${m.type}</span>
+                    <span class="memory-item-type">${escapeHtml(m.type || 'session')}</span>
+                    <span class="memory-item-time">${m.timestamp || ''}</span>
                 </div>
-                <div class="memory-item-text">${m.language} error analyzed</div>
+                <div class="memory-item-text">${escapeHtml(m.text || m.language + ' error analyzed')}</div>
             </div>
         `).join('');
+    } else {
+        els.shortTermList.innerHTML = '<div class="memory-empty">Session context will appear here</div>';
     }
     els.shortTermCount.textContent = state.shortTermMemory.length;
     
-    // Long-term (pre-seeded)
-    els.longTermList.innerHTML = PRE_SEEDED_MEMORY.map(m => `
-        <div class="memory-item">
-            <div class="memory-item-header">
-                <span class="memory-item-type">${m.type}</span>
-                <span class="memory-item-count">×${m.successCount}</span>
+    // Long-term (from AgentCore Memory API search results)
+    if (state.longTermMemory.length > 0) {
+        els.longTermList.innerHTML = state.longTermMemory.map(m => `
+            <div class="memory-item">
+                <div class="memory-item-header">
+                    <span class="memory-item-type">${escapeHtml(m.error_type || m.type || 'pattern')}</span>
+                    ${m.relevance_score ? `<span class="memory-item-count">${m.relevance_score}% match</span>` : ''}
+                    ${m.success_count ? `<span class="memory-item-count">×${m.success_count}</span>` : ''}
+                </div>
+                <div class="memory-item-text">${escapeHtml(m.solution || m.root_cause || 'Stored pattern')}</div>
             </div>
-            <div class="memory-item-text">${m.solution}</div>
-        </div>
-    `).join('');
-    els.longTermCount.textContent = PRE_SEEDED_MEMORY.length;
+        `).join('');
+    } else {
+        els.longTermList.innerHTML = '<div class="memory-empty">Long-term patterns will appear after analyses</div>';
+    }
+    els.longTermCount.textContent = state.longTermMemory.length;
 }
 
 // ===== Main Analysis =====
@@ -930,6 +940,8 @@ async function callAgentCoreBackend(errorText) {
     state.startTime = Date.now();
     state.agentsUsed = 0;
     state.toolsUsed = 0;
+    state.shortTermMemory = [];
+    state.longTermMemory = [];
     
     // Activate supervisor
     activateNode('node-runtime');
@@ -1195,14 +1207,27 @@ async function callAgentCoreBackend(errorText) {
             }
             
             if (data.agents.memory) {
-                const matches = data.agents.memory.matches || data.agents.memory.similar_errors || [];
+                const matches = data.agents.memory.matches || data.agents.memory.similar_errors || data.agents.memory.results || [];
                 result.memory = {
                     count: matches.length,
                     matches: matches,
-                    hasSolution: data.agents.memory.has_solution || false,
+                    hasSolution: data.agents.memory.has_solution || data.agents.memory.has_solutions || false,
                     analysis: data.agents.memory.analysis || '',
                     rawData: data.agents.memory
                 };
+                
+                // Populate long-term memory panel from search results
+                if (matches.length > 0) {
+                    state.longTermMemory = matches.map(m => ({
+                        error_type: m.error_type || m.type || 'pattern',
+                        root_cause: m.root_cause || '',
+                        solution: m.solution || '',
+                        language: m.language || '',
+                        relevance_score: m.relevance_score || 0,
+                        success_count: m.success_count || m.successCount || 0,
+                    }));
+                }
+                updateAgentStatus('memory', 'complete');
             }
             
             if (data.agents.stats) {
@@ -1257,6 +1282,53 @@ async function callAgentCoreBackend(errorText) {
         console.log(hasStructuredAgentData 
             ? '✅ Using structured agent data' 
             : '⚠️ No structured agent data received');
+        
+        // Populate short-term memory from this analysis session
+        // This shows what the agent learned during this run
+        const sessionMemoryEntries = [];
+        const now = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+        
+        if (result.parsed.language && result.parsed.language !== 'unknown') {
+            sessionMemoryEntries.push({
+                type: 'parsed',
+                language: result.parsed.language,
+                text: `Detected ${result.parsed.language} (${result.parsed.languageConfidence}% confidence)`,
+                timestamp: now,
+            });
+        }
+        if (result.security.riskLevel) {
+            sessionMemoryEntries.push({
+                type: 'security',
+                language: result.parsed.language,
+                text: `Security: ${result.security.riskLevel} risk — ${result.security.secretsFound} secrets, ${result.security.piiFound} PII`,
+                timestamp: now,
+            });
+        }
+        if (result.rootCause.rootCause) {
+            sessionMemoryEntries.push({
+                type: 'root_cause',
+                language: result.parsed.language,
+                text: `Root cause: ${result.rootCause.rootCause.substring(0, 120)}`,
+                timestamp: now,
+            });
+        }
+        if (result.fix.after) {
+            sessionMemoryEntries.push({
+                type: 'fix',
+                language: result.parsed.language,
+                text: `Fix generated (${result.fix.fixType || 'code'})`,
+                timestamp: now,
+            });
+        }
+        if (result.memory?.count > 0) {
+            sessionMemoryEntries.push({
+                type: 'memory_recall',
+                language: result.parsed.language,
+                text: `Found ${result.memory.count} similar past error(s) in long-term memory`,
+                timestamp: now,
+            });
+        }
+        state.shortTermMemory = sessionMemoryEntries;
         
         // Count agents and tools from the response
         if (data.agents) {
@@ -1698,10 +1770,14 @@ const LogsManager = {
             // Determine component from log group name or component field
             let component = log.component || 'runtime';
             if (!log.component && log.logGroup) {
-                if (log.logGroup.includes('parser')) component = 'parser';
+                if (log.logGroup.includes('api-proxy')) component = 'api_proxy';
+                else if (log.logGroup.includes('-logs')) component = 'logs';
+                else if (log.logGroup.includes('parser')) component = 'parser';
                 else if (log.logGroup.includes('security')) component = 'security';
                 else if (log.logGroup.includes('context')) component = 'context';
                 else if (log.logGroup.includes('stats')) component = 'stats';
+                else if (log.logGroup.includes('gateway')) component = 'gateway';
+                else if (log.logGroup.includes('memory')) component = 'memory';
                 else component = 'runtime';
             }
             
@@ -1887,8 +1963,29 @@ function init() {
     els.loadSampleBtn?.addEventListener('click', loadSample);
     els.copyBtn?.addEventListener('click', copyResults);
     
-    // PAT visibility toggle (Part 2 only)
+    // GitHub integration (Part 2 only)
     if (FEATURES.GITHUB_INTEGRATION_ENABLED) {
+        // Wire up repo/branch/PAT inputs to state
+        els.githubRepo?.addEventListener('input', (e) => {
+            state.githubRepo = e.target.value.trim();
+            updateGithubStatus('info', state.githubRepo ? `Repo: ${state.githubRepo}` : '');
+        });
+        els.githubBranch?.addEventListener('input', (e) => {
+            state.githubBranch = e.target.value.trim() || 'main';
+        });
+        els.githubPat?.addEventListener('input', (e) => {
+            const val = e.target.value.trim();
+            if (val) {
+                const valid = SecureToken.set(val);
+                updateGithubStatus(valid ? 'success' : 'warning',
+                    valid ? '🔑 PAT stored (memory only)' : '⚠️ Token set but format unrecognised');
+            } else {
+                SecureToken.clear();
+                updateGithubStatus('info', '🔒 PAT stored in memory only, never persisted');
+            }
+        });
+
+        // PAT visibility toggle
         els.togglePatBtn?.addEventListener('click', () => {
             if (els.githubPat) {
                 const isPassword = els.githubPat.type === 'password';

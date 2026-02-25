@@ -42,7 +42,7 @@ output "log_groups" {
     runtime   = aws_cloudwatch_log_group.agentcore.name
     gateway   = aws_cloudwatch_log_group.gateway.name
     memory    = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : null
-    api_proxy = aws_cloudwatch_log_group.api_proxy.name
+    api_proxy = "/aws/lambda/${local.resource_prefix}-api-proxy"
     logs      = aws_cloudwatch_log_group.logs_lambda.name
     parser    = aws_cloudwatch_log_group.parser.name
     security  = aws_cloudwatch_log_group.security.name
@@ -70,7 +70,7 @@ output "frontend_config" {
       runtime   = aws_cloudwatch_log_group.agentcore.name
       gateway   = aws_cloudwatch_log_group.gateway.name
       memory    = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : null
-      api_proxy = aws_cloudwatch_log_group.api_proxy.name
+      api_proxy = "/aws/lambda/${local.resource_prefix}-api-proxy"
       logs      = aws_cloudwatch_log_group.logs_lambda.name
       parser    = aws_cloudwatch_log_group.parser.name
       security  = aws_cloudwatch_log_group.security.name

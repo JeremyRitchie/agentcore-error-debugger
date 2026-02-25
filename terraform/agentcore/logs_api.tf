@@ -64,7 +64,7 @@ resource "aws_lambda_function" "logs" {
       RUNTIME_LOG_GROUP   = aws_cloudwatch_log_group.agentcore.name
       GATEWAY_LOG_GROUP   = aws_cloudwatch_log_group.gateway.name
       MEMORY_LOG_GROUP    = var.feature_part >= 2 ? aws_cloudwatch_log_group.memory[0].name : ""
-      API_PROXY_LOG_GROUP = aws_cloudwatch_log_group.api_proxy.name
+      API_PROXY_LOG_GROUP = "/aws/lambda/${local.resource_prefix}-api-proxy"
       LOGS_LOG_GROUP      = aws_cloudwatch_log_group.logs_lambda.name
       PARSER_LOG_GROUP    = aws_cloudwatch_log_group.parser.name
       SECURITY_LOG_GROUP  = aws_cloudwatch_log_group.security.name

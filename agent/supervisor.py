@@ -1717,20 +1717,41 @@ Respond with ONLY valid JSON:
             print(f"[ENRICH] ❌ LLM call failed: {msg}")
             log_runtime_error("enrichment", "invoke_model", msg)
     
-    # Fallback: raw memory data (same quality as before enrichment was added)
-    # Use original_confidence from when the pattern was first solved
+    # Fallback: construct a detailed fix from raw memory data
+    # (no LLM enrichment, but still give the user a complete answer)
     orig_conf = best_match.get("original_confidence", 0)
     fallback_confidence = orig_conf if orig_conf else min(relevance, 95)
     print(f"[ENRICH] Using raw memory fallback (no LLM enrichment), confidence={fallback_confidence}")
+    
+    # Build a formatted fix from stored solution
+    # The stored solution is typically a text description; format it as actionable steps
+    fix_type = error_type if error_type != "unknown" else "memory_recall"
+    
+    # Build "before" from the error context (what's wrong)
+    error_signature = best_match.get("error_signature", "")
+    before_code = error_signature if error_signature else error_text[:200]
+    
+    # Build "after" with the solution as formatted steps
+    after_code = stored_solution
+    
+    # Build explanation combining root cause and solution
+    explanation_parts = []
+    if stored_root_cause:
+        explanation_parts.append(f"Root cause: {stored_root_cause}")
+    if stored_solution:
+        explanation_parts.append(f"Solution: {stored_solution}")
+    explanation_parts.append(f"(Recalled from memory — {relevance}% match, previously solved with {fallback_confidence}% confidence)")
+    fix_explanation = " | ".join(explanation_parts)
+    
     return {
-        "root_cause": stored_root_cause,
-        "explanation": f"Resolved from memory ({relevance}% match). Previously solved with {fallback_confidence}% confidence.",
+        "root_cause": stored_root_cause or f"Known {error_type} error",
+        "explanation": f"This error was previously solved with {fallback_confidence}% confidence. {stored_root_cause}",
         "confidence": fallback_confidence,
         "solution": stored_solution,
-        "fix_type": "memory_recall",
-        "original_pattern": "",
-        "fixed_code": stored_solution,
-        "fix_explanation": f"Previously validated solution. Root cause: {stored_root_cause}",
+        "fix_type": fix_type,
+        "original_pattern": before_code,
+        "fixed_code": after_code,
+        "fix_explanation": fix_explanation,
         "additional_changes": best_match.get("prevention", []),
         "prevention": best_match.get("prevention", []),
         "enriched": False,

@@ -16,7 +16,7 @@ import uuid
 import logging
 import hashlib
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from strands import Agent, tool
 
 from .config import DEMO_MODE, MEMORY_ID as CONFIG_MEMORY_ID
@@ -88,7 +88,7 @@ def store_error_pattern(
         "solution": solution,
         "language": language,
         "content_hash": content_hash,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "success_count": 1,
     }
 
@@ -239,7 +239,7 @@ def store_session_context(context_type: str, content: str) -> str:
     _local_session_memory[context_type] = {
         "context_type": context_type,
         "content": content_dict,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     # Store as event in AgentCore
@@ -249,7 +249,7 @@ def store_session_context(context_type: str, content: str) -> str:
                 memoryId=MEMORY_ID,
                 actorId=ACTOR_ID,
                 sessionId=SESSION_ID,
-                eventTimestamp=datetime.utcnow(),
+                eventTimestamp=datetime.now(timezone.utc),
                 payload=[{
                     "conversational": {
                         "role": "ASSISTANT",
@@ -387,7 +387,7 @@ def _store_to_agentcore_records(pattern_data: Dict[str, Any]) -> Dict[str, Any]:
                 "requestIdentifier": request_id,
                 "namespaces": [MEMORY_NAMESPACE],
                 "content": {"text": record_text},
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc),
             }],
             clientToken=str(uuid.uuid4()),
         )
@@ -437,7 +437,7 @@ def _store_as_event(pattern_data: Dict[str, Any]) -> None:
             memoryId=MEMORY_ID,
             actorId=ACTOR_ID,
             sessionId=SESSION_ID,
-            eventTimestamp=datetime.utcnow(),
+            eventTimestamp=datetime.now(timezone.utc),
             payload=[{
                 "conversational": {
                     "role": "ASSISTANT",

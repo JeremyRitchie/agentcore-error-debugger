@@ -1027,9 +1027,11 @@ async function callAgentCoreBackend(errorText) {
             throw new Error(data.error || 'Unknown error from AgentCore');
         }
         
-        // Log fast path status
-        if (data.fastPath) {
-            console.log(`⚡ FAST PATH result received! Resolved from memory in ${data.fastPathElapsed}s`);
+        // Log fast path status (check both top-level and fullResponse)
+        const isFastPath = data.fastPath || data.fullResponse?.fastPath;
+        const fastPathElapsed = data.fastPathElapsed || data.fullResponse?.fastPathElapsed;
+        if (isFastPath) {
+            console.log(`⚡ FAST PATH result received! Resolved from memory in ${fastPathElapsed}s`);
         }
         
         // Normalize response structure - agents might be at top level or inside fullResponse
@@ -1285,7 +1287,7 @@ async function callAgentCoreBackend(errorText) {
                     apiError: memData.api_error || null,
                     mode: memData.mode,
                     searchQuery: memData.search_query,
-                    fastPath: data.fastPath,
+                    fastPath: data.fastPath || data.fullResponse?.fastPath || false,
                 });
                 
                 // Surface API errors prominently
@@ -1458,8 +1460,8 @@ async function callAgentCoreBackend(errorText) {
         state.shortTermMemory = sessionMemoryEntries;
         
         // Track whether this was a memory fast-path result
-        result.fastPath = data.fastPath || false;
-        result.fastPathElapsed = data.fastPathElapsed || null;
+        result.fastPath = data.fastPath || data.fullResponse?.fastPath || false;
+        result.fastPathElapsed = data.fastPathElapsed || data.fullResponse?.fastPathElapsed || null;
         
         // Count agents and tools from the response
         if (data.agents) {

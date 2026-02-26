@@ -373,6 +373,10 @@ def handler(event, context):
                         # Ensure summary is at top level
                         if 'summary' in final_result:
                             response_data['summary'] = final_result['summary']
+                        # Propagate fast path status to top level for frontend
+                        if final_result.get('fastPath'):
+                            response_data['fastPath'] = True
+                            response_data['fastPathElapsed'] = final_result.get('fastPathElapsed')
                     elif final_message and isinstance(final_message, dict):
                         msg = final_message.get('message')
                         if isinstance(msg, dict):

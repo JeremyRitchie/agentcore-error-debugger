@@ -661,12 +661,14 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
 def store_pattern(error_type: str, signature: str, root_cause: str, solution: str, language: str = "unknown") -> str:
     """Store error pattern in AgentCore memory."""
     local_count_before = memory_agent.get_local_pattern_count() if memory_agent else 0
-    logger.info(f"💾 SUPERVISOR store_pattern CALLED: type={error_type}, lang={language}, sig={signature[:60]}")
+    # Capture the original analysis confidence so the fast path can reuse it
+    original_confidence = session_context.get("analysis", {}).get("confidence", 95)
+    logger.info(f"💾 SUPERVISOR store_pattern CALLED: type={error_type}, lang={language}, sig={signature[:60]}, orig_confidence={original_confidence}")
     logger.info(f"💾 SUPERVISOR store_pattern: root_cause={root_cause[:80]}..., solution={solution[:80]}...")
     logger.info(f"💾 SUPERVISOR store_pattern: local_patterns_before={local_count_before}")
-    print(f"[SUPERVISOR] store_pattern: type={error_type}, lang={language}, sig={signature[:60]}")
+    print(f"[SUPERVISOR] store_pattern: type={error_type}, lang={language}, sig={signature[:60]}, confidence={original_confidence}")
     try:
-        result = memory_agent.store_pattern(error_type, signature, root_cause, solution, language)
+        result = memory_agent.store_pattern(error_type, signature, root_cause, solution, language, original_confidence=original_confidence)
         local_count_after = memory_agent.get_local_pattern_count() if memory_agent else 0
         logger.info(f"✅ SUPERVISOR store_pattern SUCCESS: local_patterns_after={local_count_after}, result={json.dumps(result)[:200]}")
         print(f"[SUPERVISOR] store_pattern ✅: local_after={local_count_after}, api_success={result.get('success')}, mode={result.get('mode')}")
@@ -1716,11 +1718,14 @@ Respond with ONLY valid JSON:
             log_runtime_error("enrichment", "invoke_model", msg)
     
     # Fallback: raw memory data (same quality as before enrichment was added)
-    print(f"[ENRICH] Using raw memory fallback (no LLM enrichment)")
+    # Use original_confidence from when the pattern was first solved
+    orig_conf = best_match.get("original_confidence", 0)
+    fallback_confidence = orig_conf if orig_conf else min(relevance, 95)
+    print(f"[ENRICH] Using raw memory fallback (no LLM enrichment), confidence={fallback_confidence}")
     return {
         "root_cause": stored_root_cause,
-        "explanation": f"Resolved from memory ({relevance}% match).",
-        "confidence": min(relevance, 95),
+        "explanation": f"Resolved from memory ({relevance}% match). Previously solved with {fallback_confidence}% confidence.",
+        "confidence": fallback_confidence,
         "solution": stored_solution,
         "fix_type": "memory_recall",
         "original_pattern": "",
@@ -1805,6 +1810,8 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> dict:
         relevance = best_match.get("relevance_score", 0)
         stored_solution = best_match.get("solution", "")
         stored_root_cause = best_match.get("root_cause", "")
+        # The confidence from the ORIGINAL analysis when this pattern was first solved
+        original_confidence = best_match.get("original_confidence", 0)
         
         if relevance < MEMORY_FAST_PATH_THRESHOLD or not stored_solution:
             elapsed = time.time() - fast_start
@@ -1814,8 +1821,8 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> dict:
             return {"hit": False, "elapsed": elapsed, "error": None, "details": msg}
         
         # ── FAST PATH HIT! ────────────────────────────────────────
-        logger.info(f"⚡⚡⚡ FAST PATH HIT! score={relevance}%, source={best_match.get('source')}")
-        print(f"[FAST_PATH] ⚡ HIT! score={relevance}%, solution={stored_solution[:60]}...")
+        logger.info(f"⚡⚡⚡ FAST PATH HIT! match={relevance}%, original_confidence={original_confidence}%, source={best_match.get('source')}")
+        print(f"[FAST_PATH] ⚡ HIT! match={relevance}%, original_confidence={original_confidence}%, solution={stored_solution[:60]}...")
         
         # ── Step 3: LLM Enrichment (single call, ~5-10s) ────────
         # This transforms raw memory data into a full-quality response
@@ -1845,13 +1852,18 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> dict:
             "mode": mem_result.get("mode", "live"),
         })
         
-        # Parsed data — use enriched confidence if available
+        # Determine the confidence to display:
+        # Priority: original_confidence (from when it was first solved) > enriched > match score
+        display_confidence = original_confidence or enriched.get("confidence") or min(relevance, 95)
+        print(f"[FAST_PATH] Confidence: original={original_confidence}, enriched={enriched.get('confidence', '?')}, match={relevance} → using {display_confidence}")
+        
+        # Parsed data
         update_session_context("parsed", {
             "language": language,
             "error_type": error_type,
             "error_message": core_message,
             "core_message": core_message,
-            "confidence": enriched.get("confidence", 70),
+            "confidence": display_confidence,
             "source": "fast_path_enriched" if was_enriched else "fast_path_regex",
         })
         
@@ -1861,13 +1873,13 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> dict:
             "source": "fast_path_default",
         })
         
-        # Root cause — enriched by LLM
+        # Root cause — use original confidence, enriched detail
         update_session_context("analysis", {
             "root_cause": enriched.get("root_cause", stored_root_cause),
             "explanation": enriched.get("explanation", 
                           f"Resolved from memory ({relevance}% match)."),
             "solution": enriched.get("solution", stored_solution),
-            "confidence": enriched.get("confidence", min(relevance, 95)),
+            "confidence": display_confidence,
             "category": best_match.get("error_type", error_type),
             "source": "memory_fast_path_enriched" if was_enriched else "memory_fast_path",
         })

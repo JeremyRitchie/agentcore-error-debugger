@@ -53,6 +53,10 @@ class MemoryType:
     SESSION = "session"      # Short-term: current debugging session
     SEMANTIC = "semantic"    # Long-term: error patterns, solutions
 
+# Shared state for passing original confidence from supervisor to store_error_pattern
+# (Can't add extra params to @tool-decorated functions without affecting LLM tool calling)
+_pending_original_confidence = 95
+
 
 # =============================================================================
 # TOOLS - Memory operations
@@ -98,6 +102,7 @@ def store_error_pattern(
         "content_hash": content_hash,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "success_count": 1,
+        "original_confidence": _pending_original_confidence,
     }
 
     # Always store locally first for within-process retrieval
@@ -205,6 +210,7 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
                         "root_cause": parsed.get("root_cause", ""),
                         "solution": parsed.get("solution", ""),
                         "language": parsed.get("language", ""),
+                        "original_confidence": int(parsed.get("original_confidence", 0)),
                         "relevance_score": score,
                         "success_count": int(parsed.get("success_count", 1)),
                         "timestamp": parsed.get("timestamp", ""),
@@ -213,7 +219,6 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
                     })
                 except Exception as parse_err:
                     logger.warning(f"  → Skipped: error parsing record #{idx+1}: {parse_err}")
-                    continue
 
             logger.info(f"🔎 API SEARCH: {len(api_results)} valid results after filtering")
 
@@ -713,9 +718,12 @@ def search(query: str, limit: int = 5, **kwargs) -> Dict[str, Any]:
 
 
 def store_pattern(error_type: str, signature: str, root_cause: str, 
-                  solution: str, language: str = "unknown") -> Dict[str, Any]:
+                  solution: str, language: str = "unknown",
+                  original_confidence: int = 95) -> Dict[str, Any]:
     """Store an error pattern."""
-    logger.info(f"🧠 memory_agent.store_pattern() called: type={error_type}, lang={language}")
+    global _pending_original_confidence
+    _pending_original_confidence = original_confidence
+    logger.info(f"🧠 memory_agent.store_pattern() called: type={error_type}, lang={language}, confidence={original_confidence}")
     result_str = store_error_pattern(error_type, signature, root_cause, solution, language)
     result = json.loads(result_str)
     logger.info(f"🧠 memory_agent.store_pattern() result: success={result.get('success')}, mode={result.get('mode')}, local_count={len(_local_semantic_memory)}")

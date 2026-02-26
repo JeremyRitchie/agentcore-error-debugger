@@ -15,12 +15,10 @@ DEMO MODE:
 - DEMO_MODE=false: Use real AWS APIs (for production)
 """
 import os
-import sys
 import json
 import logging
 from datetime import datetime
 from strands import Agent, tool
-from strands.models import BedrockModel
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 # ============================================================================
@@ -207,7 +205,6 @@ def log_runtime_error(component: str, operation: str, error: str, fatal: bool = 
     Log a runtime error so it reaches both CloudWatch (via print) AND the frontend console.
     Every call site that catches an exception should call this.
     """
-    import traceback
     entry = {
         "component": component,
         "operation": operation,
@@ -1590,7 +1587,7 @@ def _enrich_from_memory(error_text: str, parsed: dict, best_match: dict) -> dict
     Falls back to raw memory data on any failure.
     """
     import boto3
-    from agents.config import AWS_REGION, BEDROCK_MODEL_ID, DEMO_MODE
+    from agents.config import BEDROCK_MODEL_ID, DEMO_MODE
     
     stored_solution = best_match.get("solution", "")
     stored_root_cause = best_match.get("root_cause", "")

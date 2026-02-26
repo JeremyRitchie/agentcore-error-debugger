@@ -571,7 +571,9 @@ def fix_agent_tool(
 )
 def search_memory(error_text: str, limit: int = 5, language: str = "", error_type: str = "") -> str:
     """Search AgentCore memory for similar errors with context."""
-    update_component_status("memory", "running", "Searching for similar past errors...")
+    local_count = memory_agent.get_local_pattern_count() if memory_agent else 0
+    logger.info(f"🔎 SUPERVISOR search_memory CALLED: query_len={len(error_text)}, lang={language}, type={error_type}, local_patterns={local_count}")
+    update_component_status("memory", "running", f"Searching memory ({local_count} local patterns)...")
     try:
         # Enhance search query with context for better semantic matching
         search_query = error_text
@@ -580,10 +582,17 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
         if error_type and error_type != "unknown":
             search_query = f"{error_type}: {search_query}"
         
+        logger.info(f"🔎 SUPERVISOR search_memory: enhanced query = {search_query[:120]}...")
+        
         result = memory_agent.search(search_query, limit)
         count = result.get('count', 0)
+        best_score = result.get('best_match_score', 0)
+        has_relevant = result.get('has_relevant_match', False)
+        
+        logger.info(f"🔎 SUPERVISOR search_memory RESULT: count={count}, best_score={best_score}, has_relevant={has_relevant}")
         
         if result.get('error'):
+            logger.error(f"❌ SUPERVISOR search_memory ERROR: {result.get('error')}")
             update_component_status("memory", "error", error=result.get('error'))
             return json.dumps({"success": False, "error": result.get('error'), **result})
         
@@ -595,11 +604,6 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
             session_context["memory"]["stored_patterns"] = existing_stored
         
         # CRITICAL: Sync "results" → "matches" for frontend compatibility
-        # search_similar_errors returns data under "results" key, but the initial
-        # session_context["memory"] has a "matches" key (initialized to []).
-        # On the frontend, JS uses `memData.matches || memData.results` but
-        # empty arrays are TRUTHY in JavaScript, so [] || [...data] returns [].
-        # We must explicitly copy results into matches to fix this.
         search_results = session_context["memory"].get("results", [])
         session_context["memory"]["matches"] = search_results
         
@@ -610,11 +614,12 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
         session_context["memory"]["memory_searched"] = True
         session_context["memory"]["search_query"] = search_query[:100]
         
-        logger.info(f"📝 Memory context updated: {count} results synced to 'matches' key")
+        logger.info(f"📝 SUPERVISOR search_memory: session_context['memory'] updated — {count} results synced, memory_searched=True, has_solution={result.get('has_solutions', False)}")
         
-        update_component_status("memory", "success", f"Found {count} similar errors in memory")
+        update_component_status("memory", "success", f"Found {count} similar errors (best: {best_score}%)")
         return json.dumps({"success": True, **result})
     except Exception as e:
+        logger.error(f"❌ SUPERVISOR search_memory EXCEPTION: {str(e)}")
         update_component_status("memory", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e), "results": []})
 
@@ -625,13 +630,16 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
 )
 def store_pattern(error_type: str, signature: str, root_cause: str, solution: str, language: str = "unknown") -> str:
     """Store error pattern in AgentCore memory."""
-    logger.info(f"💾 Storing pattern: {error_type}")
+    local_count_before = memory_agent.get_local_pattern_count() if memory_agent else 0
+    logger.info(f"💾 SUPERVISOR store_pattern CALLED: type={error_type}, lang={language}, sig={signature[:60]}")
+    logger.info(f"💾 SUPERVISOR store_pattern: root_cause={root_cause[:80]}..., solution={solution[:80]}...")
+    logger.info(f"💾 SUPERVISOR store_pattern: local_patterns_before={local_count_before}")
     try:
         result = memory_agent.store_pattern(error_type, signature, root_cause, solution, language)
-        logger.info(f"✅ Pattern stored")
+        local_count_after = memory_agent.get_local_pattern_count() if memory_agent else 0
+        logger.info(f"✅ SUPERVISOR store_pattern SUCCESS: local_patterns_after={local_count_after}, result={json.dumps(result)[:200]}")
         
         # Update session_context["memory"] so the frontend can see what was learned
-        # This is critical for the memory panel to show learned patterns
         stored_pattern = {
             "error_type": error_type,
             "signature": signature,
@@ -640,8 +648,6 @@ def store_pattern(error_type: str, signature: str, root_cause: str, solution: st
             "language": language,
             "stored_this_session": True,
         }
-        # Add to stored_patterns list in session context
-        # (stored_patterns is pre-initialized in session_context["memory"])
         memory_ctx = session_context.get("memory", {})
         if "stored_patterns" not in memory_ctx:
             memory_ctx["stored_patterns"] = []
@@ -649,11 +655,11 @@ def store_pattern(error_type: str, signature: str, root_cause: str, solution: st
         memory_ctx["pattern_stored"] = True
         memory_ctx["stored_count"] = len(memory_ctx["stored_patterns"])
         update_session_context("memory", memory_ctx)
-        logger.info(f"📝 Added stored pattern to session_context['memory']['stored_patterns'] ({memory_ctx['stored_count']} total)")
+        logger.info(f"📝 SUPERVISOR store_pattern: session_context updated, stored_patterns_count={memory_ctx['stored_count']}")
         
         return json.dumps(result)
     except Exception as e:
-        logger.error(f"❌ Store pattern error: {str(e)}")
+        logger.error(f"❌ SUPERVISOR store_pattern EXCEPTION: {str(e)}")
         return json.dumps({"error": str(e)})
 
 
@@ -1474,9 +1480,13 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> bool:
     import time
     fast_start = time.time()
     
+    local_count = memory_agent.get_local_pattern_count() if memory_agent else 0
+    
     if not memory_agent:
-        logger.info("⏭️ Memory fast path: memory_agent not available, skipping")
+        logger.info("⏭️ FAST PATH: memory_agent not available, skipping")
         return False
+    
+    logger.info(f"⚡ FAST PATH START: local_patterns={local_count}, input_len={len(user_input)}")
     
     try:
         # ── Step 1: Parse the error (Lambda call, no LLM) ──────────────
@@ -1487,7 +1497,7 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> bool:
         core_message = parsed.get("core_message", parsed.get("error_message", user_input[:200]))
         update_session_context("parsed", parsed)
         update_component_status("parser", "success", f"Detected: {language}")
-        logger.info(f"⚡ Fast path parse: {language} / {error_type} ({time.time() - fast_start:.1f}s)")
+        logger.info(f"⚡ FAST PATH parse: lang={language}, type={error_type}, core={core_message[:80]} ({time.time() - fast_start:.1f}s)")
         
         # ── Step 2: Security scan (Lambda call, no LLM) ───────────────
         update_component_status("security", "running", "Security scan (fast path)...")

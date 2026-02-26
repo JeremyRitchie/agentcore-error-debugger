@@ -1027,6 +1027,11 @@ async function callAgentCoreBackend(errorText) {
             throw new Error(data.error || 'Unknown error from AgentCore');
         }
         
+        // Log fast path status
+        if (data.fastPath) {
+            console.log(`⚡ FAST PATH result received! Resolved from memory in ${data.fastPathElapsed}s`);
+        }
+        
         // Normalize response structure - agents might be at top level or inside fullResponse
         // Check multiple possible locations for the agent data
         let agents = data.agents;
@@ -1274,7 +1279,29 @@ async function callAgentCoreBackend(errorText) {
                     patternStored: memData.pattern_stored,
                     hasSolution: memData.has_solution,
                     hasSolutions: memData.has_solutions,
+                    bestMatchScore: memData.best_match_score,
+                    localCount: memData.local_count,
+                    apiCount: memData.api_count,
+                    searchQuery: memData.search_query,
+                    fastPath: data.fastPath,
                 });
+                
+                // Log each match for debugging
+                if (matches.length > 0) {
+                    console.log('🧠 Memory matches found:');
+                    matches.forEach((m, i) => {
+                        console.log(`  Match #${i+1}: score=${m.relevance_score}, type=${m.error_type}, source=${m.source}, solution=${(m.solution || '').substring(0, 80)}...`);
+                    });
+                } else {
+                    console.log('🧠 No memory matches found. Pattern stored:', memData.pattern_stored);
+                }
+                
+                if (storedPatterns.length > 0) {
+                    console.log('🧠 Patterns stored this session:');
+                    storedPatterns.forEach((p, i) => {
+                        console.log(`  Stored #${i+1}: type=${p.error_type}, lang=${p.language}, solution=${(p.solution || '').substring(0, 80)}...`);
+                    });
+                }
                 
                 // Populate long-term memory panel
                 // First: search results (past matches found)

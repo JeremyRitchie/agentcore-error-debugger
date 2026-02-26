@@ -146,11 +146,16 @@ session_context = {
         "secrets_found": [],
     },
     
-    # From Memory
+    # From Memory (search_memory populates "results" and syncs to "matches")
     "memory": {
         "matches": [],
+        "results": [],
         "has_solution": False,
+        "has_solutions": False,
         "best_match_similarity": 0,
+        "memory_searched": False,
+        "pattern_stored": False,
+        "stored_patterns": [],
     },
     
     # From Context (GitHub/StackOverflow search results)
@@ -200,7 +205,7 @@ def reset_session_context():
         "original_error": "",
         "parsed": {"language": "unknown", "language_confidence": 0, "core_message": "", "stack_frames": [], "file_paths": [], "raw_error": ""},
         "security": {"risk_level": "unknown", "safe_to_store": True, "pii_found": [], "secrets_found": []},
-        "memory": {"matches": [], "has_solution": False, "best_match_similarity": 0},
+        "memory": {"matches": [], "results": [], "has_solution": False, "has_solutions": False, "best_match_similarity": 0, "memory_searched": False, "pattern_stored": False, "stored_patterns": []},
         "context": {"github_issues": [], "stackoverflow_questions": [], "stackoverflow_answers": [], "code_examples": [], "top_solutions": [], "common_causes": []},
         "analysis": {"root_cause": "", "explanation": "", "confidence": 0, "category": "", "contributing_factors": []},
         "fix": {"fixed_code": "", "fix_type": "", "explanation": "", "prevention": []},
@@ -584,9 +589,23 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
         if existing_stored:
             session_context["memory"]["stored_patterns"] = existing_stored
         
+        # CRITICAL: Sync "results" → "matches" for frontend compatibility
+        # search_similar_errors returns data under "results" key, but the initial
+        # session_context["memory"] has a "matches" key (initialized to []).
+        # On the frontend, JS uses `memData.matches || memData.results` but
+        # empty arrays are TRUTHY in JavaScript, so [] || [...data] returns [].
+        # We must explicitly copy results into matches to fix this.
+        search_results = session_context["memory"].get("results", [])
+        session_context["memory"]["matches"] = search_results
+        
+        # Sync has_solution/has_solutions naming (frontend checks both)
+        session_context["memory"]["has_solution"] = result.get("has_solutions", False)
+        
         # Also set 'searched' flag so frontend knows memory was actively used
         session_context["memory"]["memory_searched"] = True
         session_context["memory"]["search_query"] = search_query[:100]
+        
+        logger.info(f"📝 Memory context updated: {count} results synced to 'matches' key")
         
         update_component_status("memory", "success", f"Found {count} similar errors in memory")
         return json.dumps({"success": True, **result})
@@ -617,12 +636,15 @@ def store_pattern(error_type: str, signature: str, root_cause: str, solution: st
             "stored_this_session": True,
         }
         # Add to stored_patterns list in session context
-        if "stored_patterns" not in session_context.get("memory", {}):
-            session_context.setdefault("memory", {})["stored_patterns"] = []
-        session_context["memory"]["stored_patterns"].append(stored_pattern)
-        session_context["memory"]["pattern_stored"] = True
-        session_context["memory"]["stored_count"] = len(session_context["memory"]["stored_patterns"])
-        logger.info(f"📝 Added stored pattern to session_context['memory']['stored_patterns'] ({session_context['memory']['stored_count']} total)")
+        # (stored_patterns is pre-initialized in session_context["memory"])
+        memory_ctx = session_context.get("memory", {})
+        if "stored_patterns" not in memory_ctx:
+            memory_ctx["stored_patterns"] = []
+        memory_ctx["stored_patterns"].append(stored_pattern)
+        memory_ctx["pattern_stored"] = True
+        memory_ctx["stored_count"] = len(memory_ctx["stored_patterns"])
+        update_session_context("memory", memory_ctx)
+        logger.info(f"📝 Added stored pattern to session_context['memory']['stored_patterns'] ({memory_ctx['stored_count']} total)")
         
         return json.dumps(result)
     except Exception as e:

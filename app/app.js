@@ -621,13 +621,15 @@ function displayResults(result) {
     let html = '';
     
     // Memory match (Part 2 only)
-    if (FEATURES.MEMORY_ENABLED && result.memory?.hasSolution) {
+    if (FEATURES.MEMORY_ENABLED && result.memory?.hasSolution && result.memory.matches?.length > 0) {
+        const topMatch = result.memory.matches[0];
+        const successCount = topMatch.success_count || topMatch.successCount || 1;
         html += `
             <div class="result-section memory fade-in">
                 <h3>🧠 Memory Match Found!</h3>
                 <p class="result-text">Similar error found in memory. Previous solution:</p>
-                <div class="result-code">${result.memory.matches[0].solution}</div>
-                <span class="result-badge positive">×${result.memory.matches[0].successCount} successful uses</span>
+                <div class="result-code">${escapeHtml(topMatch.solution || topMatch.root_cause || 'Stored pattern')}</div>
+                <span class="result-badge positive">×${successCount} successful uses</span>
             </div>
         `;
     }
@@ -723,6 +725,16 @@ function displayResults(result) {
     
     // Fix
     const hasGitHub = FEATURES.GITHUB_INTEGRATION_ENABLED && state.githubRepo && SecureToken.hasToken();
+    // Build context-aware GitHub hint (tells user exactly what's missing)
+    let githubHint = '';
+    if (!hasGitHub && FEATURES.GITHUB_INTEGRATION_ENABLED) {
+        const missingParts = [];
+        if (!state.githubRepo) missingParts.push('a GitHub repo (owner/repo)');
+        if (!SecureToken.hasToken()) missingParts.push('a GitHub PAT');
+        githubHint = missingParts.length > 0
+            ? `💡 Add ${missingParts.join(' and ')} to create issues/PRs directly`
+            : '💡 Configure GitHub integration above to create issues/PRs';
+    }
     html += `
         <div class="result-section fix fade-in">
             <h3>🔧 Suggested Fix</h3>
@@ -750,9 +762,9 @@ function displayResults(result) {
                     </button>
                 </div>
                 <div class="github-action-status" id="githubActionStatus"></div>
-            ` : FEATURES.GITHUB_INTEGRATION_ENABLED ? `
+            ` : githubHint ? `
                 <p class="result-text hint" style="margin-top: 8px; font-size: 0.75rem; color: var(--text-muted);">
-                    💡 Add a GitHub PAT to create issues/PRs directly
+                    ${githubHint}
                 </p>
             ` : ''}
         </div>
@@ -1229,8 +1241,15 @@ async function callAgentCoreBackend(errorText) {
             
             if (data.agents.memory) {
                 const memData = data.agents.memory;
-                const matches = memData.matches || memData.similar_errors || memData.results || [];
-                const storedPatterns = memData.stored_patterns || [];
+                // IMPORTANT: Use length-aware checks, not truthy/falsy.
+                // Empty arrays [] are TRUTHY in JavaScript, so
+                // `[] || [1,2]` returns [] (the wrong answer).
+                // We must check .length to properly fall through.
+                const matches = (memData.matches?.length > 0 ? memData.matches : null)
+                             || (memData.similar_errors?.length > 0 ? memData.similar_errors : null)
+                             || (memData.results?.length > 0 ? memData.results : null)
+                             || [];
+                const storedPatterns = (memData.stored_patterns?.length > 0 ? memData.stored_patterns : null) || [];
                 
                 result.memory = {
                     count: matches.length,
@@ -1244,10 +1263,15 @@ async function callAgentCoreBackend(errorText) {
                 };
                 
                 console.log('🧠 Memory data:', {
-                    searchResults: matches.length,
-                    storedPatterns: storedPatterns.length,
+                    rawKeys: Object.keys(memData),
+                    matchesKeyLen: memData.matches?.length,
+                    resultsKeyLen: memData.results?.length,
+                    resolvedMatchesLen: matches.length,
+                    storedPatternsLen: storedPatterns.length,
                     memorySearched: memData.memory_searched,
                     patternStored: memData.pattern_stored,
+                    hasSolution: memData.has_solution,
+                    hasSolutions: memData.has_solutions,
                 });
                 
                 // Populate long-term memory panel

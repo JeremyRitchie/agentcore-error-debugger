@@ -169,7 +169,7 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
         try:
             logger.info(f"🔎 API SEARCH: retrieve_memory_records(memoryId={MEMORY_ID[:12]}..., namespace={MEMORY_NAMESPACE}, query_len={len(error_text)}, topK={limit})")
             response = bedrock_agentcore.retrieve_memory_records(
-            memoryId=MEMORY_ID,
+                memoryId=MEMORY_ID,
                 namespace=MEMORY_NAMESPACE,
                 searchCriteria={
                     "searchQuery": error_text,
@@ -194,12 +194,12 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
                     parsed = _parse_record_text(text)
                     if not parsed:
                         logger.info(f"  → Skipped: could not parse record text")
-                    continue
-                
+                        continue
+
                     if score < MIN_RELEVANCE_THRESHOLD:
                         logger.info(f"  → Skipped: low relevance ({score} < {MIN_RELEVANCE_THRESHOLD})")
                         continue
-                
+
                     api_results.append({
                         "error_type": parsed.get("error_type", ""),
                         "root_cause": parsed.get("root_cause", ""),
@@ -213,11 +213,11 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
                     })
                 except Exception as parse_err:
                     logger.warning(f"  → Skipped: error parsing record #{idx+1}: {parse_err}")
-                continue
-        
+                    continue
+
             logger.info(f"🔎 API SEARCH: {len(api_results)} valid results after filtering")
-        
-    except Exception as e:
+
+        except Exception as e:
             api_error = f"{type(e).__name__}: {e}"
             logger.error(f"❌ API SEARCH FAILED: {api_error}")
             print(f"[MEMORY_SEARCH] ❌ API FAILED: {api_error}")

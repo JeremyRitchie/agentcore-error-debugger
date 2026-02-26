@@ -76,6 +76,7 @@ def store_error_pattern(
     logger.info(f"💾 MEMORY STORE: type={error_type}, lang={language}, sig={error_signature[:60]}")
     logger.info(f"💾 MEMORY STORE: root_cause={root_cause[:100]}...")
     logger.info(f"💾 MEMORY STORE: solution={solution[:100]}...")
+    print(f"[MEMORY_STORE] type={error_type}, lang={language}, sig={error_signature[:60]}")
 
     # Generate content hash for deduplication
     content = f"{error_type}:{error_signature}:{root_cause}"
@@ -107,6 +108,7 @@ def store_error_pattern(
     result["content_hash"] = content_hash
 
     logger.info(f"✅ MEMORY STORE COMPLETE: hash={content_hash}, mode={result.get('mode', 'local')}, local_count={len(_local_semantic_memory)}")
+    print(f"[MEMORY_STORE] ✅ Complete: hash={content_hash}, mode={result.get('mode', 'local')}, api_success={api_result.get('success')}, local_count={len(_local_semantic_memory)}")
     return json.dumps(result)
 
 
@@ -124,6 +126,7 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
         JSON with matching past errors and their solutions
     """
     logger.info(f"🔎 MEMORY SEARCH: query={error_text[:120]}... (mode: {'DEMO' if DEMO_MODE else 'LIVE'}, local_patterns={len(_local_semantic_memory)})")
+    print(f"[MEMORY_SEARCH] query={error_text[:80]}... mode={'DEMO' if DEMO_MODE else 'LIVE'}, local_patterns={len(_local_semantic_memory)}")
 
     # Extract error_type and language from query if embedded
     detected_language = ""
@@ -485,6 +488,9 @@ def _build_search_response(
         response["api_error"] = api_error
 
     logger.info(f"✅ SEARCH RESPONSE: {len(local_results)} local + {len(api_results)} API = {len(all_results)} total (best={best_score}, relevant={has_relevant}, api_error={'YES: ' + api_error[:80] if api_error else 'none'})")
+    print(f"[MEMORY_SEARCH] ✅ Results: {len(local_results)} local + {len(api_results)} API = {len(all_results)} total, best={best_score}%, relevant={has_relevant}")
+    if api_error:
+        print(f"[MEMORY_SEARCH] ⚠️ API error: {api_error[:120]}")
     return json.dumps(response)
 
 

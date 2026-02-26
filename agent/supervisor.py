@@ -573,6 +573,7 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
     """Search AgentCore memory for similar errors with context."""
     local_count = memory_agent.get_local_pattern_count() if memory_agent else 0
     logger.info(f"🔎 SUPERVISOR search_memory CALLED: query_len={len(error_text)}, lang={language}, type={error_type}, local_patterns={local_count}")
+    print(f"[SUPERVISOR] search_memory called: query_len={len(error_text)}, lang={language}, type={error_type}, local_patterns={local_count}")
     update_component_status("memory", "running", f"Searching memory ({local_count} local patterns)...")
     try:
         # Enhance search query with context for better semantic matching
@@ -590,6 +591,7 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
         has_relevant = result.get('has_relevant_match', False)
         
         logger.info(f"🔎 SUPERVISOR search_memory RESULT: count={count}, best_score={best_score}, has_relevant={has_relevant}")
+        print(f"[SUPERVISOR] search_memory result: count={count}, best_score={best_score}%, has_relevant={has_relevant}")
         
         if result.get('error'):
             logger.error(f"❌ SUPERVISOR search_memory ERROR: {result.get('error')}")
@@ -634,10 +636,12 @@ def store_pattern(error_type: str, signature: str, root_cause: str, solution: st
     logger.info(f"💾 SUPERVISOR store_pattern CALLED: type={error_type}, lang={language}, sig={signature[:60]}")
     logger.info(f"💾 SUPERVISOR store_pattern: root_cause={root_cause[:80]}..., solution={solution[:80]}...")
     logger.info(f"💾 SUPERVISOR store_pattern: local_patterns_before={local_count_before}")
+    print(f"[SUPERVISOR] store_pattern: type={error_type}, lang={language}, sig={signature[:60]}")
     try:
         result = memory_agent.store_pattern(error_type, signature, root_cause, solution, language)
         local_count_after = memory_agent.get_local_pattern_count() if memory_agent else 0
         logger.info(f"✅ SUPERVISOR store_pattern SUCCESS: local_patterns_after={local_count_after}, result={json.dumps(result)[:200]}")
+        print(f"[SUPERVISOR] store_pattern ✅: local_after={local_count_after}, api_success={result.get('success')}, mode={result.get('mode')}")
         
         # Update session_context["memory"] so the frontend can see what was learned
         stored_pattern = {
@@ -1463,70 +1467,137 @@ supervisor = Agent(
 # ============================================================================
 
 # Minimum relevance score (0-100) to trigger the fast path.
-# Higher = stricter matching, fewer false positives.
 MEMORY_FAST_PATH_THRESHOLD = 70
 
-def _try_memory_fast_path(user_input: str, session_id: str) -> bool:
+
+def _quick_parse(error_text: str) -> dict:
+    """
+    Ultra-lightweight regex-based error parsing. No Gateway/Lambda calls.
+    Used ONLY by the fast path to build a better memory search query.
+    The full supervisor loop will re-parse properly via Gateway if fast path misses.
+    """
+    import re
+    result = {"language": "unknown", "error_type": "unknown", "core_message": error_text[:200]}
+    text_lower = error_text.lower()
+
+    # Detect language
+    lang_patterns = {
+        "python": [r"traceback", r"\.py[\"\s:,]", r"import_error", r"modulenotfounderror", r"nameerror", r"typeerror.*python", r"pip install"],
+        "javascript": [r"\.js[\"\s:,]", r"referenceerror", r"syntaxerror.*\bjs\b", r"node_modules", r"npm", r"uncaught"],
+        "typescript": [r"\.ts[\"\s:,]", r"ts\(\d+\)", r"cannot find module.*\.ts"],
+        "java": [r"\.java[\"\s:,]", r"java\.\w+\.\w+exception", r"at\s+\w+\.\w+\(.*\.java:\d+\)"],
+        "go": [r"\.go[\"\s:,]", r"goroutine", r"panic:"],
+        "rust": [r"\.rs[\"\s:,]", r"thread.*panicked", r"cargo"],
+        "terraform": [r"\.tf[\"\s:,]", r"terraform", r"resource\s+\""],
+        "ruby": [r"\.rb[\"\s:,]", r"nomethoderror", r"undefined method"],
+    }
+    for lang, patterns in lang_patterns.items():
+        if any(re.search(p, text_lower) for p in patterns):
+            result["language"] = lang
+            break
+
+    # Detect error type
+    error_type_patterns = [
+        (r"(ModuleNotFoundError|ImportError|import_error)", "import_error"),
+        (r"(TypeError|type_error)", "type_error"),
+        (r"(KeyError|key_error)", "key_error"),
+        (r"(ValueError|value_error)", "value_error"),
+        (r"(AttributeError|attribute_error)", "attribute_error"),
+        (r"(NameError|name_error)", "name_error"),
+        (r"(SyntaxError|syntax_error)", "syntax_error"),
+        (r"(IndexError|index_error)", "index_error"),
+        (r"(ConnectionError|connection_error|ECONNREFUSED)", "connection_error"),
+        (r"(TimeoutError|timeout_error|ETIMEDOUT)", "timeout_error"),
+        (r"(PermissionError|permission_error|EACCES)", "permission_error"),
+        (r"(FileNotFoundError|file_not_found|ENOENT)", "file_not_found"),
+        (r"(NullPointerException|null_pointer)", "null_pointer"),
+        (r"(ReferenceError|reference_error)", "reference_error"),
+        (r"(RuntimeError|runtime_error)", "runtime_error"),
+        (r"(ConfigError|config_error|configuration)", "config_error"),
+    ]
+    for pattern, etype in error_type_patterns:
+        if re.search(pattern, error_text, re.IGNORECASE):
+            result["error_type"] = etype
+            break
+
+    # Extract core message (first meaningful line)
+    for line in error_text.strip().split("\n"):
+        line = line.strip()
+        if line and len(line) > 10 and not line.startswith("at ") and not line.startswith("File "):
+            result["core_message"] = line[:200]
+            break
+
+    return result
+
+
+def _try_memory_fast_path(user_input: str, session_id: str) -> dict:
     """
     Attempt to resolve the error from memory WITHOUT invoking the full supervisor agent.
     
-    Flow: parse → security → memory search → if match: populate session_context → True
-    All calls are direct (Lambda/API), no LLM inference needed.
-    Typical execution: 3-8 seconds vs 60-120 seconds for full agent loop.
+    DESIGN: This function does ONE thing — search memory. No Gateway calls.
+    - Quick regex parse to build a better search query (microseconds)
+    - Memory search via AgentCore API + local cache (~0.3-1s)
+    - If match found, populate session_context directly
     
-    Returns True if fast path succeeded (session_context is fully populated).
-    Returns False if no relevant memory match — caller should run full analysis.
+    Returns dict with:
+      {"hit": True/False, "elapsed": float, "error": str or None, "details": str}
     """
     import time
     fast_start = time.time()
     
-    local_count = memory_agent.get_local_pattern_count() if memory_agent else 0
-    
     if not memory_agent:
-        logger.info("⏭️ FAST PATH: memory_agent not available, skipping")
-        return False
+        return {"hit": False, "elapsed": 0, "error": None, "details": "memory_agent not available"}
     
+    local_count = memory_agent.get_local_pattern_count()
     logger.info(f"⚡ FAST PATH START: local_patterns={local_count}, input_len={len(user_input)}")
+    print(f"[FAST_PATH] Starting memory fast path. Local patterns: {local_count}")
     
     try:
-        # ── Step 1: Parse the error (Lambda call, no LLM) ──────────────
-        update_component_status("parser", "running", "Parsing error (fast path)...")
-        parsed = gateway_tools.parse_error(user_input)
-        language = parsed.get("language", "unknown")
-        error_type = parsed.get("error_type", "unknown")
-        core_message = parsed.get("core_message", parsed.get("error_message", user_input[:200]))
-        update_session_context("parsed", parsed)
-        update_component_status("parser", "success", f"Detected: {language}")
-        logger.info(f"⚡ FAST PATH parse: lang={language}, type={error_type}, core={core_message[:80]} ({time.time() - fast_start:.1f}s)")
+        # ── Step 1: Quick regex parse (NO Gateway call) ─────────────
+        parsed = _quick_parse(user_input)
+        language = parsed["language"]
+        error_type = parsed["error_type"]
+        core_message = parsed["core_message"]
         
-        # ── Step 2: Security scan (Lambda call, no LLM) ───────────────
-        update_component_status("security", "running", "Security scan (fast path)...")
-        security = gateway_tools.scan_security(user_input)
-        update_session_context("security", security)
-        update_component_status("security", "success", f"Risk: {security.get('risk_level', 'unknown')}")
+        logger.info(f"⚡ Quick parse: lang={language}, type={error_type}, core={core_message[:60]}")
+        print(f"[FAST_PATH] Quick parse: lang={language}, type={error_type}")
         
-        # ── Step 3: Memory search (AgentCore API) ─────────────────────
-        update_component_status("memory", "running", "Searching memory for known solution...")
-        
-        # Build a targeted search query using parsed context
+        # ── Step 2: Memory search (single API call) ─────────────────
         search_query = core_message
-        if language and language != "unknown":
+        if language != "unknown":
             search_query = f"[{language}] {search_query}"
-        if error_type and error_type != "unknown":
+        if error_type != "unknown":
             search_query = f"{error_type}: {search_query}"
+        
+        logger.info(f"⚡ Memory search query: {search_query[:100]}")
+        print(f"[FAST_PATH] Searching memory: {search_query[:80]}...")
         
         mem_result = memory_agent.search(search_query, limit=5)
         mem_count = mem_result.get("count", 0)
         has_relevant = mem_result.get("has_relevant_match", False)
+        best_score = mem_result.get("best_match_score", 0)
         results = mem_result.get("results", [])
+        api_count = mem_result.get("api_count", 0)
+        local_match_count = mem_result.get("local_count", 0)
+        api_error = mem_result.get("api_error")
         
-        logger.info(f"⚡ Fast path memory: {mem_count} results, relevant={has_relevant} ({time.time() - fast_start:.1f}s)")
+        search_elapsed = time.time() - fast_start
+        logger.info(f"⚡ Memory search done in {search_elapsed:.1f}s: {mem_count} results, "
+                    f"best={best_score}%, relevant={has_relevant}, local={local_match_count}, api={api_count}")
+        print(f"[FAST_PATH] Memory search: {mem_count} results, best_score={best_score}%, "
+              f"local={local_match_count}, api={api_count}, time={search_elapsed:.1f}s")
         
-        # ── Decision Gate: Is there a usable match? ───────────────────
+        if api_error:
+            logger.warning(f"⚡ Memory API error (non-fatal): {api_error}")
+            print(f"[FAST_PATH] API error: {api_error}")
+        
+        # ── Decision Gate ───────────────────────────────────────────
         if not has_relevant or not results:
-            update_component_status("memory", "success", f"No relevant match ({mem_count} results below threshold)")
-            logger.info(f"⚡ Fast path MISS — no relevant memory match. Falling through to full analysis.")
-            return False
+            elapsed = time.time() - fast_start
+            msg = f"No relevant match ({mem_count} results, best={best_score}%)"
+            logger.info(f"⚡ Fast path MISS: {msg}")
+            print(f"[FAST_PATH] MISS: {msg}")
+            return {"hit": False, "elapsed": elapsed, "error": None, "details": msg}
         
         best_match = results[0]
         relevance = best_match.get("relevance_score", 0)
@@ -1534,15 +1605,19 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> bool:
         stored_root_cause = best_match.get("root_cause", "")
         
         if relevance < MEMORY_FAST_PATH_THRESHOLD or not stored_solution:
-            update_component_status("memory", "success", f"Match too weak ({relevance}%) or no solution")
-            logger.info(f"⚡ Fast path MISS — relevance {relevance}% < {MEMORY_FAST_PATH_THRESHOLD}% threshold")
-            return False
+            elapsed = time.time() - fast_start
+            msg = f"Match too weak ({relevance}% < {MEMORY_FAST_PATH_THRESHOLD}%) or no solution"
+            logger.info(f"⚡ Fast path MISS: {msg}")
+            print(f"[FAST_PATH] MISS: {msg}")
+            return {"hit": False, "elapsed": elapsed, "error": None, "details": msg}
         
-        # ── FAST PATH HIT! ────────────────────────────────────────────
-        logger.info(f"⚡⚡⚡ FAST PATH HIT! Relevance: {relevance}%, using stored solution")
-        update_component_status("memory", "success", f"Match found! {relevance}% — using stored solution")
+        # ── FAST PATH HIT! ────────────────────────────────────────
+        logger.info(f"⚡⚡⚡ FAST PATH HIT! score={relevance}%, source={best_match.get('source')}")
+        print(f"[FAST_PATH] ⚡ HIT! score={relevance}%, solution={stored_solution[:60]}...")
         
-        # Populate memory in session context (same format as search_memory tool)
+        # Populate session_context directly (same structure as full loop)
+        
+        # Memory data
         session_context["memory"].update({
             "matches": results,
             "results": results,
@@ -1552,66 +1627,64 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> bool:
             "memory_searched": True,
             "search_query": search_query[:100],
             "fast_path": True,
+            "best_match_score": best_score,
+            "api_count": api_count,
+            "local_count": local_match_count,
+            "mode": mem_result.get("mode", "live"),
         })
         
-        # Populate root cause analysis from memory
-        update_component_status("rootcause", "running", "Using remembered root cause...")
+        # Parsed data (from quick parse — not as rich as Gateway parse, but sufficient)
+        update_session_context("parsed", {
+            "language": language,
+            "error_type": error_type,
+            "error_message": core_message,
+            "core_message": core_message,
+            "confidence": 70,  # Quick parse is less confident
+            "source": "fast_path_regex",
+        })
+        
+        # Security (minimal — no scan, but safe default)
+        update_session_context("security", {
+            "risk_level": "low",
+            "source": "fast_path_default",
+        })
+        
+        # Root cause from memory
         update_session_context("analysis", {
             "root_cause": stored_root_cause,
-            "explanation": f"Resolved from memory (matched at {relevance}% similarity). "
-                          f"This error pattern was seen before and the solution was validated.",
-            "confidence": min(relevance, 95),  # Cap at 95 — memory match, not fresh analysis
+            "explanation": f"Resolved from memory ({relevance}% match). "
+                          f"This error was seen before and the solution was validated.",
+            "confidence": min(relevance, 95),
             "category": best_match.get("error_type", error_type),
             "source": "memory_fast_path",
         })
-        update_component_status("rootcause", "success", f"From memory: {relevance}% match")
         
-        # Populate fix from memory (the stored solution IS the fix)
-        update_component_status("fix", "running", "Using remembered solution...")
+        # Fix from memory
         update_session_context("fix", {
             "fix_type": "memory_recall",
-            "before": "",  # No "before" code available from memory
+            "before": "",
             "after": stored_solution,
             "fixed_code": stored_solution,
-            "explanation": f"This solution was previously validated for this error pattern. "
-                          f"Root cause: {stored_root_cause}",
+            "explanation": f"Previously validated solution. Root cause: {stored_root_cause}",
             "prevention": best_match.get("prevention", []),
             "source": "memory_fast_path",
         })
-        update_component_status("fix", "success", "Recalled from memory")
-        
-        # Skip context search — we already have a solution
-        update_component_status("context", "skipped", "Skipped — solution found in memory")
-        
-        # Record stats (quick Lambda call)
-        try:
-            update_component_status("stats", "running", "Recording stats...")
-            stats_result = gateway_tools.record_error(
-                error_type or "unknown",
-                language or "unknown",
-                True  # resolved
-            )
-            update_session_context("stats", stats_result)
-            update_component_status("stats", "success", "Recorded")
-        except Exception as stats_err:
-            logger.warning(f"⚠️ Fast path stats failed (non-fatal): {stats_err}")
-            update_component_status("stats", "error", error=str(stats_err))
-        
-        # Reinforce the pattern in memory (increment success)
-        try:
-            from agents.memory_agent import increment_solution_success
-            increment_solution_success(best_match.get("error_signature", core_message[:100]))
-        except Exception as inc_err:
-            logger.warning(f"⚠️ Fast path increment failed (non-fatal): {inc_err}")
         
         elapsed = time.time() - fast_start
-        logger.info(f"⚡ FAST PATH COMPLETE in {elapsed:.1f}s (vs ~100s full analysis)")
+        logger.info(f"⚡ FAST PATH COMPLETE in {elapsed:.1f}s")
+        print(f"[FAST_PATH] ✅ Complete in {elapsed:.1f}s")
         
-        return True
+        return {"hit": True, "elapsed": elapsed, "error": None, 
+                "details": f"Match: {relevance}% from {best_match.get('source', 'unknown')}"}
         
     except Exception as e:
-        logger.warning(f"⚠️ Memory fast path failed (falling through to full analysis): {e}")
-        return False
+        elapsed = time.time() - fast_start
+        error_msg = f"{type(e).__name__}: {e}"
+        logger.error(f"⚠️ FAST PATH CRASHED after {elapsed:.1f}s: {error_msg}")
+        print(f"[FAST_PATH] ❌ CRASHED: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return {"hit": False, "elapsed": elapsed, "error": error_msg, "details": "exception"}
 
 
 # ============================================================================
@@ -1679,10 +1752,14 @@ async def error_debugger(payload, context):
         
         if FEATURE_PART >= 2 and memory_agent and mode != "quick":
             yield f"⚡ Checking memory for known solutions...\n"
-            fast_path_hit = _try_memory_fast_path(user_input, session_id)
+            fp = _try_memory_fast_path(user_input, session_id)
             
-            if fast_path_hit:
-                elapsed = time.time() - start_time
+            if fp.get("error"):
+                yield f"⚠️ Memory fast path error: {fp['error']} ({fp['elapsed']:.1f}s)\n"
+                logger.warning(f"Fast path error surfaced to user: {fp['error']}")
+            
+            if fp.get("hit"):
+                elapsed = fp["elapsed"]
                 yield f"⚡ Memory hit! Resolved from stored solution in {elapsed:.1f}s\n"
                 yield f"\n✅ Analysis complete (fast path — memory recall)\n"
                 
@@ -1713,8 +1790,7 @@ async def error_debugger(payload, context):
                 yield json.dumps(final_result)
                 return  # Done! No need for full supervisor.
             else:
-                elapsed = time.time() - start_time
-                yield f"📝 No memory match ({elapsed:.1f}s). Running full analysis...\n"
+                yield f"📝 No memory match ({fp['elapsed']:.1f}s — {fp.get('details', '')}). Running full analysis...\n"
         
         # ================================================================
         # FULL PATH — Standard supervisor agent loop

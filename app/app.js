@@ -1282,9 +1282,16 @@ async function callAgentCoreBackend(errorText) {
                     bestMatchScore: memData.best_match_score,
                     localCount: memData.local_count,
                     apiCount: memData.api_count,
+                    apiError: memData.api_error || null,
+                    mode: memData.mode,
                     searchQuery: memData.search_query,
                     fastPath: data.fastPath,
                 });
+                
+                // Surface API errors prominently
+                if (memData.api_error) {
+                    console.warn('⚠️ Memory API Error:', memData.api_error);
+                }
                 
                 // Log each match for debugging
                 if (matches.length > 0) {

@@ -123,9 +123,13 @@ resource "aws_iam_policy" "agentcore_runtime" {
         Sid    = "AgentCoreMemory"
         Effect = "Allow"
         Action = [
-          "bedrock-agentcore:CreateMemoryEvent",
-          "bedrock-agentcore:GetMemoryEvents",
-          "bedrock-agentcore:SearchMemory"
+          "bedrock-agentcore:CreateEvent",
+          "bedrock-agentcore:ListEvents",
+          "bedrock-agentcore:GetEvent",
+          "bedrock-agentcore:BatchCreateMemoryRecords",
+          "bedrock-agentcore:RetrieveMemoryRecords",
+          "bedrock-agentcore:ListMemoryRecords",
+          "bedrock-agentcore:StartMemoryExtractionJob"
         ]
         Resource = var.feature_part >= 2 ? aws_bedrockagentcore_memory.main[0].arn : "arn:aws:bedrock-agentcore:${local.region}:${local.account_id}:memory/*"
       },

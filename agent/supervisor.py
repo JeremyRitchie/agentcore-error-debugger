@@ -1453,6 +1453,158 @@ supervisor = Agent(
 )
 
 # ============================================================================
+# Memory Fast Path — Skip Full Agent Loop When Solution Already Known
+# ============================================================================
+
+# Minimum relevance score (0-100) to trigger the fast path.
+# Higher = stricter matching, fewer false positives.
+MEMORY_FAST_PATH_THRESHOLD = 70
+
+def _try_memory_fast_path(user_input: str, session_id: str) -> bool:
+    """
+    Attempt to resolve the error from memory WITHOUT invoking the full supervisor agent.
+    
+    Flow: parse → security → memory search → if match: populate session_context → True
+    All calls are direct (Lambda/API), no LLM inference needed.
+    Typical execution: 3-8 seconds vs 60-120 seconds for full agent loop.
+    
+    Returns True if fast path succeeded (session_context is fully populated).
+    Returns False if no relevant memory match — caller should run full analysis.
+    """
+    import time
+    fast_start = time.time()
+    
+    if not memory_agent:
+        logger.info("⏭️ Memory fast path: memory_agent not available, skipping")
+        return False
+    
+    try:
+        # ── Step 1: Parse the error (Lambda call, no LLM) ──────────────
+        update_component_status("parser", "running", "Parsing error (fast path)...")
+        parsed = gateway_tools.parse_error(user_input)
+        language = parsed.get("language", "unknown")
+        error_type = parsed.get("error_type", "unknown")
+        core_message = parsed.get("core_message", parsed.get("error_message", user_input[:200]))
+        update_session_context("parsed", parsed)
+        update_component_status("parser", "success", f"Detected: {language}")
+        logger.info(f"⚡ Fast path parse: {language} / {error_type} ({time.time() - fast_start:.1f}s)")
+        
+        # ── Step 2: Security scan (Lambda call, no LLM) ───────────────
+        update_component_status("security", "running", "Security scan (fast path)...")
+        security = gateway_tools.scan_security(user_input)
+        update_session_context("security", security)
+        update_component_status("security", "success", f"Risk: {security.get('risk_level', 'unknown')}")
+        
+        # ── Step 3: Memory search (AgentCore API) ─────────────────────
+        update_component_status("memory", "running", "Searching memory for known solution...")
+        
+        # Build a targeted search query using parsed context
+        search_query = core_message
+        if language and language != "unknown":
+            search_query = f"[{language}] {search_query}"
+        if error_type and error_type != "unknown":
+            search_query = f"{error_type}: {search_query}"
+        
+        mem_result = memory_agent.search(search_query, limit=5)
+        mem_count = mem_result.get("count", 0)
+        has_relevant = mem_result.get("has_relevant_match", False)
+        results = mem_result.get("results", [])
+        
+        logger.info(f"⚡ Fast path memory: {mem_count} results, relevant={has_relevant} ({time.time() - fast_start:.1f}s)")
+        
+        # ── Decision Gate: Is there a usable match? ───────────────────
+        if not has_relevant or not results:
+            update_component_status("memory", "success", f"No relevant match ({mem_count} results below threshold)")
+            logger.info(f"⚡ Fast path MISS — no relevant memory match. Falling through to full analysis.")
+            return False
+        
+        best_match = results[0]
+        relevance = best_match.get("relevance_score", 0)
+        stored_solution = best_match.get("solution", "")
+        stored_root_cause = best_match.get("root_cause", "")
+        
+        if relevance < MEMORY_FAST_PATH_THRESHOLD or not stored_solution:
+            update_component_status("memory", "success", f"Match too weak ({relevance}%) or no solution")
+            logger.info(f"⚡ Fast path MISS — relevance {relevance}% < {MEMORY_FAST_PATH_THRESHOLD}% threshold")
+            return False
+        
+        # ── FAST PATH HIT! ────────────────────────────────────────────
+        logger.info(f"⚡⚡⚡ FAST PATH HIT! Relevance: {relevance}%, using stored solution")
+        update_component_status("memory", "success", f"Match found! {relevance}% — using stored solution")
+        
+        # Populate memory in session context (same format as search_memory tool)
+        session_context["memory"].update({
+            "matches": results,
+            "results": results,
+            "count": mem_count,
+            "has_solution": True,
+            "has_solutions": True,
+            "memory_searched": True,
+            "search_query": search_query[:100],
+            "fast_path": True,
+        })
+        
+        # Populate root cause analysis from memory
+        update_component_status("rootcause", "running", "Using remembered root cause...")
+        update_session_context("analysis", {
+            "root_cause": stored_root_cause,
+            "explanation": f"Resolved from memory (matched at {relevance}% similarity). "
+                          f"This error pattern was seen before and the solution was validated.",
+            "confidence": min(relevance, 95),  # Cap at 95 — memory match, not fresh analysis
+            "category": best_match.get("error_type", error_type),
+            "source": "memory_fast_path",
+        })
+        update_component_status("rootcause", "success", f"From memory: {relevance}% match")
+        
+        # Populate fix from memory (the stored solution IS the fix)
+        update_component_status("fix", "running", "Using remembered solution...")
+        update_session_context("fix", {
+            "fix_type": "memory_recall",
+            "before": "",  # No "before" code available from memory
+            "after": stored_solution,
+            "fixed_code": stored_solution,
+            "explanation": f"This solution was previously validated for this error pattern. "
+                          f"Root cause: {stored_root_cause}",
+            "prevention": best_match.get("prevention", []),
+            "source": "memory_fast_path",
+        })
+        update_component_status("fix", "success", "Recalled from memory")
+        
+        # Skip context search — we already have a solution
+        update_component_status("context", "skipped", "Skipped — solution found in memory")
+        
+        # Record stats (quick Lambda call)
+        try:
+            update_component_status("stats", "running", "Recording stats...")
+            stats_result = gateway_tools.record_error(
+                error_type or "unknown",
+                language or "unknown",
+                True  # resolved
+            )
+            update_session_context("stats", stats_result)
+            update_component_status("stats", "success", "Recorded")
+        except Exception as stats_err:
+            logger.warning(f"⚠️ Fast path stats failed (non-fatal): {stats_err}")
+            update_component_status("stats", "error", error=str(stats_err))
+        
+        # Reinforce the pattern in memory (increment success)
+        try:
+            from agents.memory_agent import increment_solution_success
+            increment_solution_success(best_match.get("error_signature", core_message[:100]))
+        except Exception as inc_err:
+            logger.warning(f"⚠️ Fast path increment failed (non-fatal): {inc_err}")
+        
+        elapsed = time.time() - fast_start
+        logger.info(f"⚡ FAST PATH COMPLETE in {elapsed:.1f}s (vs ~100s full analysis)")
+        
+        return True
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Memory fast path failed (falling through to full analysis): {e}")
+        return False
+
+
+# ============================================================================
 # AgentCore Runtime Entrypoint
 # ============================================================================
 @app.entrypoint
@@ -1460,8 +1612,13 @@ async def error_debugger(payload, context):
     """
     Main entrypoint for the error debugger supervisor agent.
     Invoked by AgentCore runtime for each request.
+    
+    Two execution paths:
+    1. FAST PATH (Part 2 only): parse → memory search → if match, return in <15s
+    2. FULL PATH: Full supervisor agent loop with all tools (~60-120s)
     """
     import traceback
+    import time
     
     logger.info("=" * 50)
     logger.info("🚀 Error Debugger Entrypoint Called")
@@ -1500,6 +1657,58 @@ async def error_debugger(payload, context):
         
         # Bypass tool consent for automation
         os.environ["BYPASS_TOOL_CONSENT"] = "true"
+        
+        # ================================================================
+        # MEMORY FAST PATH (Part 2 only)
+        # Before starting the expensive supervisor agent loop, check if
+        # we've seen this error before. If memory has a high-confidence
+        # match with a validated solution, skip the full analysis entirely.
+        # This drops response time from ~100s to ~5-10s.
+        # ================================================================
+        start_time = time.time()
+        
+        if FEATURE_PART >= 2 and memory_agent and mode != "quick":
+            yield f"⚡ Checking memory for known solutions...\n"
+            fast_path_hit = _try_memory_fast_path(user_input, session_id)
+            
+            if fast_path_hit:
+                elapsed = time.time() - start_time
+                yield f"⚡ Memory hit! Resolved from stored solution in {elapsed:.1f}s\n"
+                yield f"\n✅ Analysis complete (fast path — memory recall)\n"
+                
+                # Generate summary and yield final result (same format as full path)
+                summary = generate_final_summary(session_context)
+                
+                agents_data = {
+                    "parser": session_context.get("parsed", {}),
+                    "security": session_context.get("security", {}),
+                    "rootcause": session_context.get("analysis", {}),
+                    "fix": session_context.get("fix", {}),
+                    "context": session_context.get("context", {}),
+                    "memory": session_context.get("memory", {}),
+                    "stats": session_context.get("stats", {}),
+                }
+                
+                final_result = {
+                    "_agentcore_final_result": True,
+                    "agents": agents_data,
+                    "summary": summary,
+                    "eventCount": 0,
+                    "sessionId": session_id,
+                    "fastPath": True,
+                    "fastPathElapsed": round(elapsed, 1),
+                }
+                
+                logger.info(f"⚡ Fast path result yielded in {elapsed:.1f}s")
+                yield json.dumps(final_result)
+                return  # Done! No need for full supervisor.
+            else:
+                elapsed = time.time() - start_time
+                yield f"📝 No memory match ({elapsed:.1f}s). Running full analysis...\n"
+        
+        # ================================================================
+        # FULL PATH — Standard supervisor agent loop
+        # ================================================================
         
         # Build prompt with optional repo context
         repo_context = f"\nGitHub Repository: {github_repo}" if github_repo else ""
@@ -1544,7 +1753,8 @@ Follow the full analysis workflow with all agents.
             else:
                 yield str(event)
         
-        yield f"\n✅ Analysis complete ({event_count} events)\n"
+        elapsed = time.time() - start_time
+        yield f"\n✅ Analysis complete ({event_count} events, {elapsed:.1f}s)\n"
         
         # Log what's in session_context before generating summary
         logger.info("=" * 40)

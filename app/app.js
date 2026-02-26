@@ -819,9 +819,11 @@ function displayResults(result) {
         <div class="result-section fade-in">
             <h3>📊 Analysis Metrics</h3>
             <p class="result-text">
+                ${result.fastPath ? `<span class="result-badge positive" style="margin-bottom: 8px; display: inline-block;">⚡ Memory Fast Path — ${result.fastPathElapsed || execTime}s</span><br>` : ''}
                 <strong>Agents Used:</strong> ${state.agentsUsed}<br>
                 <strong>Tool Calls:</strong> ${state.toolsUsed}<br>
                 <strong>Execution Time:</strong> ${execTime}s
+                ${result.fastPath ? ' (recalled from memory)' : ''}
                 ${FEATURES.STATS_AGENT_ENABLED && result.stats ? `<br><strong>Trend:</strong> ${result.stats.trend}` : ''}
             </p>
         </div>
@@ -1421,6 +1423,10 @@ async function callAgentCoreBackend(errorText) {
         }
         state.shortTermMemory = sessionMemoryEntries;
         
+        // Track whether this was a memory fast-path result
+        result.fastPath = data.fastPath || false;
+        result.fastPathElapsed = data.fastPathElapsed || null;
+        
         // Count agents and tools from the response
         if (data.agents) {
             const agentKeys = ['parser', 'security', 'context', 'rootcause', 'fix', 'memory', 'stats'];
@@ -1430,14 +1436,16 @@ async function callAgentCoreBackend(errorText) {
                     agentCount++;
                 }
             }
-            // Add supervisor as always running
-            state.agentsUsed = agentCount + 1; // +1 for supervisor
+            // Add supervisor as always running (unless fast path skipped it)
+            state.agentsUsed = data.fastPath ? agentCount : agentCount + 1;
             
             // Estimate tool calls from eventCount (roughly 1 tool call per ~500 events)
-            // Or use explicit count if available
-            state.toolsUsed = Math.max(agentCount * 2, Math.floor((data.eventCount || 0) / 500));
+            // On fast path, tool calls are direct API calls (parse + security + memory + stats)
+            state.toolsUsed = data.fastPath
+                ? agentCount  // Each agent = 1 direct call on fast path
+                : Math.max(agentCount * 2, Math.floor((data.eventCount || 0) / 500));
             
-            console.log(`📊 Agents used: ${state.agentsUsed}, Tool calls: ${state.toolsUsed}`);
+            console.log(`📊 Agents used: ${state.agentsUsed}, Tool calls: ${state.toolsUsed}, fastPath: ${data.fastPath}`);
         }
         
         // Store raw response for debugging

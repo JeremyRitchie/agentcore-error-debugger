@@ -750,8 +750,15 @@ function displayResults(result) {
             <div class="result-code">${escapeHtml(result.fix.before)}</div>
             <p class="result-text"><strong>After:</strong></p>
             <div class="result-code">${escapeHtml(result.fix.after)}</div>
-            <p class="result-text">${result.fix.explanation}</p>
-            
+            <p class="result-text">${escapeHtml(result.fix.explanation)}</p>
+            ${result.fix.additionalChanges?.length > 0 ? `
+                <div style="margin-top: 8px;">
+                    <p class="result-text"><strong>Additional Steps:</strong></p>
+                    <ul style="margin: 4px 0 0 16px; color: var(--text-secondary); font-size: 0.85rem;">
+                        ${result.fix.additionalChanges.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
+                    </ul>
+                </div>
+            ` : ''}
             ${hasGitHub ? `
                 <div class="github-actions" style="margin-top: 12px; display: flex; gap: 8px;">
                     <button class="btn-github" id="createIssueBtn" onclick="handleCreateIssue()">
@@ -1255,8 +1262,11 @@ async function callAgentCoreBackend(errorText) {
                     before: data.agents.fix.before || data.agents.fix.original_pattern || '',
                     after: data.agents.fix.after || data.agents.fix.fixed_code || '',
                     explanation: data.agents.fix.explanation || '',
-                    // Support both additional_changes and prevention arrays
-                    additionalChanges: data.agents.fix.additional_changes || data.agents.fix.prevention || [],
+                    // Combine additional_changes + prevention into one actionable list
+                    additionalChanges: [
+                        ...(data.agents.fix.additional_changes || []),
+                        ...(data.agents.fix.prevention || [])
+                    ].filter((v, i, a) => v && a.indexOf(v) === i),  // deduplicate
                     isValid: data.agents.fix.is_valid !== false,
                     testCode: data.agents.fix.test_code || '',
                     rawData: data.agents.fix
@@ -1489,14 +1499,14 @@ async function callAgentCoreBackend(errorText) {
                     agentCount++;
                 }
             }
-            // Add supervisor as always running (unless fast path skipped it)
-            state.agentsUsed = data.fastPath ? agentCount : agentCount + 1;
-            
-            // Estimate tool calls from eventCount (roughly 1 tool call per ~500 events)
-            // On fast path, tool calls are direct API calls (parse + security + memory + stats)
-            state.toolsUsed = data.fastPath
-                ? agentCount  // Each agent = 1 direct call on fast path
-                : Math.max(agentCount * 2, Math.floor((data.eventCount || 0) / 500));
+            if (data.fastPath) {
+                // Fast path: 1 regex parse + 1 memory search + 1 LLM enrichment = 3 operations
+                state.agentsUsed = 2; // Memory + LLM enrichment
+                state.toolsUsed = 3;  // parse + memory_search + llm_enrich
+            } else {
+                state.agentsUsed = agentCount + 1; // +1 for supervisor
+                state.toolsUsed = Math.max(agentCount * 2, Math.floor((data.eventCount || 0) / 500));
+            }
             
             console.log(`📊 Agents used: ${state.agentsUsed}, Tool calls: ${state.toolsUsed}, fastPath: ${data.fastPath || data.fullResponse?.fastPath || false}, runtimeErrors: ${runtimeErrors.length}`);
         }

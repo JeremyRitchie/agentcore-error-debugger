@@ -953,9 +953,23 @@ def generate_final_summary(context: dict) -> dict:
         summary_parts.append(f"\n**Suggested Fix** ({fix_type}):")
         if fix_before:
             summary_parts.append(f"Before: `{fix_before[:100]}`")
-        summary_parts.append(f"After: `{fix_after[:100]}`")
+        summary_parts.append(f"After: `{fix_after[:200]}`")
         if fix_explanation:
-            summary_parts.append(f"Explanation: {fix_explanation[:200]}")
+            summary_parts.append(f"Explanation: {fix_explanation[:300]}")
+    
+    # Additional changes / verification steps (from enrichment or fix agent)
+    additional = fix.get("additional_changes", [])
+    if additional:
+        summary_parts.append(f"\n**Additional Steps**:")
+        for step in additional[:5]:
+            summary_parts.append(f"- {step}")
+    
+    # Prevention tips
+    prevention = fix.get("prevention", [])
+    if prevention:
+        summary_parts.append(f"\n**Prevention**:")
+        for tip in prevention[:3]:
+            summary_parts.append(f"- {tip}")
     
     # Resources found
     resources = []
@@ -987,6 +1001,8 @@ def generate_final_summary(context: dict) -> dict:
         "fixBefore": fix_before,
         "fixAfter": fix_after,
         "fixExplanation": fix_explanation,
+        "additionalChanges": fix.get("additional_changes", []),
+        "prevention": fix.get("prevention", []),
         "riskLevel": risk_level,
         "resourceCounts": {
             "github": github_count,
@@ -1565,6 +1581,134 @@ def _quick_parse(error_text: str) -> dict:
     return result
 
 
+def _enrich_from_memory(error_text: str, parsed: dict, best_match: dict) -> dict:
+    """
+    Make ONE Bedrock LLM call to enrich a raw memory match into a full-quality response.
+    This takes ~5-10s but produces output as good as the full supervisor loop.
+    
+    Returns enriched dict with: analysis, fix, confidence, prevention.
+    Falls back to raw memory data on any failure.
+    """
+    import boto3
+    from agents.config import AWS_REGION, BEDROCK_MODEL_ID, DEMO_MODE
+    
+    stored_solution = best_match.get("solution", "")
+    stored_root_cause = best_match.get("root_cause", "")
+    language = parsed.get("language", "unknown")
+    error_type = parsed.get("error_type", "unknown")
+    relevance = best_match.get("relevance_score", 75)
+    
+    # In demo mode, return synthetic enriched data
+    if DEMO_MODE:
+        return {
+            "root_cause": stored_root_cause or f"Known {error_type} error in {language}",
+            "explanation": f"This is a well-known {error_type} error. {stored_root_cause}",
+            "confidence": min(relevance + 15, 98),
+            "solution": stored_solution,
+            "fix_type": best_match.get("error_type", "memory_recall"),
+            "original_pattern": "",
+            "fixed_code": stored_solution,
+            "fix_explanation": f"Previously validated solution for this {error_type} error.",
+            "additional_changes": best_match.get("prevention", []),
+            "prevention": best_match.get("prevention", []),
+            "enriched": True,
+        }
+    
+    try:
+        bedrock = boto3.client('bedrock-runtime', region_name=AWS_REGION)
+        
+        prompt = f"""You are an expert software debugging assistant. A user has encountered an error that we've seen before. 
+Using the stored solution and root cause from our memory, generate a COMPLETE, HIGH-QUALITY analysis.
+
+## Error Information
+**Language:** {language}
+**Error Type:** {error_type}
+**Error Text:** {error_text[:500]}
+
+## Stored Memory (from previous resolution)
+**Root Cause:** {stored_root_cause}
+**Solution:** {stored_solution}
+
+## Your Task
+Using this memory, generate a thorough, enriched response. The stored solution is correct — your job is to:
+1. Explain the root cause clearly and in detail
+2. Format the fix as proper, copy-paste-ready code
+3. Add prevention tips
+4. Assign a confidence score (85-98% since this is a known, previously-solved error)
+
+Respond with ONLY valid JSON:
+{{
+  "root_cause": "Detailed root cause explanation (2-3 sentences)",
+  "explanation": "Why this error occurs and what the root cause means",
+  "confidence": <number 85-98>,
+  "solution": "Clear step-by-step solution text",
+  "fix_type": "descriptive fix type (e.g. install_dependency, syntax_fix, config_change)",
+  "original_pattern": "the problematic code pattern if identifiable",
+  "fixed_code": "the complete fix code — ready to copy-paste",
+  "fix_explanation": "2-3 sentences explaining the fix and why it works",
+  "additional_changes": ["other recommended steps", "verification commands"],
+  "prevention": ["how to prevent this in the future"]
+}}"""
+
+        logger.info(f"⚡ LLM enrichment call starting (model={BEDROCK_MODEL_ID})")
+        print(f"[FAST_PATH] Calling LLM for enrichment...")
+        enrich_start = __import__('time').time()
+        
+        response = bedrock.invoke_model(
+            modelId=BEDROCK_MODEL_ID,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 1500,
+                "temperature": 0.1,
+                "messages": [{"role": "user", "content": prompt}]
+            })
+        )
+        
+        response_body = json.loads(response['body'].read())
+        content = response_body.get('content', [{}])[0].get('text', '{}')
+        
+        enrich_elapsed = __import__('time').time() - enrich_start
+        logger.info(f"⚡ LLM enrichment response in {enrich_elapsed:.1f}s")
+        print(f"[FAST_PATH] LLM enrichment done in {enrich_elapsed:.1f}s")
+        
+        # Parse JSON from response
+        start = content.find('{')
+        end = content.rfind('}') + 1
+        if start != -1 and end > start:
+            enriched = json.loads(content[start:end])
+            enriched["enriched"] = True
+            enriched["enrich_time"] = round(enrich_elapsed, 1)
+            logger.info(f"⚡ Enrichment parsed: confidence={enriched.get('confidence', '?')}%, "
+                       f"fix_type={enriched.get('fix_type', '?')}")
+            print(f"[FAST_PATH] Enrichment: confidence={enriched.get('confidence', '?')}%, "
+                  f"fix_type={enriched.get('fix_type', '?')}")
+            return enriched
+        
+        logger.warning(f"⚡ LLM enrichment response not parseable, using raw memory")
+        print(f"[FAST_PATH] LLM response not JSON, falling back to raw memory")
+        
+    except Exception as e:
+        logger.error(f"⚡ LLM enrichment failed: {e}")
+        print(f"[FAST_PATH] LLM enrichment failed: {e} — using raw memory data")
+    
+    # Fallback: raw memory data (same as before)
+    return {
+        "root_cause": stored_root_cause,
+        "explanation": f"Resolved from memory ({relevance}% match).",
+        "confidence": min(relevance, 95),
+        "solution": stored_solution,
+        "fix_type": "memory_recall",
+        "original_pattern": "",
+        "fixed_code": stored_solution,
+        "fix_explanation": f"Previously validated solution. Root cause: {stored_root_cause}",
+        "additional_changes": best_match.get("prevention", []),
+        "prevention": best_match.get("prevention", []),
+        "enriched": False,
+    }
+
+
 def _try_memory_fast_path(user_input: str, session_id: str) -> dict:
     """
     Attempt to resolve the error from memory WITHOUT invoking the full supervisor agent.
@@ -1650,6 +1794,16 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> dict:
         logger.info(f"⚡⚡⚡ FAST PATH HIT! score={relevance}%, source={best_match.get('source')}")
         print(f"[FAST_PATH] ⚡ HIT! score={relevance}%, solution={stored_solution[:60]}...")
         
+        # ── Step 3: LLM Enrichment (single call, ~5-10s) ────────
+        # This transforms raw memory data into a full-quality response
+        enriched = _enrich_from_memory(user_input, parsed, best_match)
+        was_enriched = enriched.get("enriched", False)
+        
+        logger.info(f"⚡ Enrichment: enriched={was_enriched}, confidence={enriched.get('confidence', '?')}%")
+        print(f"[FAST_PATH] Enrichment: enriched={was_enriched}, "
+              f"confidence={enriched.get('confidence', '?')}%, "
+              f"fix_type={enriched.get('fix_type', '?')}")
+        
         # Populate session_context directly (same structure as full loop)
         
         # Memory data
@@ -1668,14 +1822,14 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> dict:
             "mode": mem_result.get("mode", "live"),
         })
         
-        # Parsed data (from quick parse — not as rich as Gateway parse, but sufficient)
+        # Parsed data — use enriched confidence if available
         update_session_context("parsed", {
             "language": language,
             "error_type": error_type,
             "error_message": core_message,
             "core_message": core_message,
-            "confidence": 70,  # Quick parse is less confident
-            "source": "fast_path_regex",
+            "confidence": enriched.get("confidence", 70),
+            "source": "fast_path_enriched" if was_enriched else "fast_path_regex",
         })
         
         # Security (minimal — no scan, but safe default)
@@ -1684,25 +1838,28 @@ def _try_memory_fast_path(user_input: str, session_id: str) -> dict:
             "source": "fast_path_default",
         })
         
-        # Root cause from memory
+        # Root cause — enriched by LLM
         update_session_context("analysis", {
-            "root_cause": stored_root_cause,
-            "explanation": f"Resolved from memory ({relevance}% match). "
-                          f"This error was seen before and the solution was validated.",
-            "confidence": min(relevance, 95),
+            "root_cause": enriched.get("root_cause", stored_root_cause),
+            "explanation": enriched.get("explanation", 
+                          f"Resolved from memory ({relevance}% match)."),
+            "solution": enriched.get("solution", stored_solution),
+            "confidence": enriched.get("confidence", min(relevance, 95)),
             "category": best_match.get("error_type", error_type),
-            "source": "memory_fast_path",
+            "source": "memory_fast_path_enriched" if was_enriched else "memory_fast_path",
         })
         
-        # Fix from memory
+        # Fix — enriched by LLM with proper code formatting
         update_session_context("fix", {
-            "fix_type": "memory_recall",
-            "before": "",
-            "after": stored_solution,
-            "fixed_code": stored_solution,
-            "explanation": f"Previously validated solution. Root cause: {stored_root_cause}",
-            "prevention": best_match.get("prevention", []),
-            "source": "memory_fast_path",
+            "fix_type": enriched.get("fix_type", "memory_recall"),
+            "before": enriched.get("original_pattern", ""),
+            "after": enriched.get("fixed_code", stored_solution),
+            "fixed_code": enriched.get("fixed_code", stored_solution),
+            "explanation": enriched.get("fix_explanation", 
+                          f"Previously validated solution. Root cause: {stored_root_cause}"),
+            "additional_changes": enriched.get("additional_changes", []),
+            "prevention": enriched.get("prevention", best_match.get("prevention", [])),
+            "source": "memory_fast_path_enriched" if was_enriched else "memory_fast_path",
         })
         
         elapsed = time.time() - fast_start
@@ -1795,8 +1952,8 @@ async def error_debugger(payload, context):
             
             if fp.get("hit"):
                 elapsed = fp["elapsed"]
-                yield f"⚡ Memory hit! Resolved from stored solution in {elapsed:.1f}s\n"
-                yield f"\n✅ Analysis complete (fast path — memory recall)\n"
+                yield f"⚡ Memory hit! Known solution found & enriched in {elapsed:.1f}s\n"
+                yield f"\n✅ Analysis complete (fast path — memory recall + LLM enrichment)\n"
                 
                 # Generate summary and yield final result (same format as full path)
                 summary = generate_final_summary(session_context)

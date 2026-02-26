@@ -613,19 +613,24 @@ def _local_search(query: str, error_type: str = "", language: str = "", min_scor
                     score += 6
                     breakdown.append(f"sol({term})=+6")
 
-        score = min(score, 100)
+        # Don't cap score here — keep raw score for accurate ranking
+        # Cap to 100 only when returning to caller
 
         if score >= min_score:
             logger.info(f"  ✅ #{idx} MATCH: score={score}, type={pattern.get('error_type')}, [{', '.join(breakdown)}]")
             results.append({
                 **{k: v for k, v in pattern.items() if k != 'memory_category'},
-                "relevance_score": score,
+                "relevance_score": min(score, 100),  # Cap for display only
+                "_raw_score": score,  # Keep raw for ranking
                 "source": "local",
             })
         elif score > 20:
             logger.info(f"  ❌ #{idx} MISS: score={score} < {min_score}, [{', '.join(breakdown)}]")
 
-    results.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+    # Sort by raw score (uncapped) for accurate ranking, then clean up
+    results.sort(key=lambda x: x.get('_raw_score', x.get('relevance_score', 0)), reverse=True)
+    for r in results:
+        r.pop('_raw_score', None)  # Remove internal field before returning
     logger.info(f"🔎 Local search: {len(results)} results above threshold")
     return results
 

@@ -1,7 +1,10 @@
-.terraform
-.terraform.lock.hcl# Terraform
+# Terraform
 .terraform/
+.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
-.terraform.lock.hcl
 *.zip
+
+# Python
+__pycache__/
+*.pyc

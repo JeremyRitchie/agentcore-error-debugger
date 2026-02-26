@@ -196,7 +196,30 @@ session_context = {
     
     # Reasoning trace
     "reasoning": [],
+    
+    # Runtime error log — every failure is captured here and sent to the frontend
+    "_runtime_errors": [],
 }
+
+
+def log_runtime_error(component: str, operation: str, error: str, fatal: bool = False):
+    """
+    Log a runtime error so it reaches both CloudWatch (via print) AND the frontend console.
+    Every call site that catches an exception should call this.
+    """
+    import traceback
+    entry = {
+        "component": component,
+        "operation": operation,
+        "error": str(error)[:500],
+        "fatal": fatal,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    session_context.setdefault("_runtime_errors", []).append(entry)
+    
+    severity = "FATAL" if fatal else "ERROR"
+    print(f"[RUNTIME_{severity}] [{component}] {operation}: {str(error)[:300]}")
+    logger.error(f"[{component}] {operation}: {error}")
 
 def reset_session_context():
     """Reset session context for new analysis."""
@@ -211,6 +234,7 @@ def reset_session_context():
         "fix": {"fixed_code": "", "fix_type": "", "explanation": "", "prevention": []},
         "stats": {"error_type": "", "occurrence_count": 0, "trend": "stable"},
         "reasoning": [],
+        "_runtime_errors": [],
     }
     logger.info("🔄 Session context reset with keys: " + ", ".join(session_context.keys()))
 
@@ -337,6 +361,7 @@ def parser_agent_tool(error_text: str) -> str:
         return json.dumps({"success": True, **result})
     except Exception as e:
         logger.error(f"❌ parser_agent_tool error: {e}")
+        log_runtime_error("parser", "parse_error", str(e))
         update_component_status("parser", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e)})
 
@@ -369,6 +394,7 @@ def security_agent_tool(error_text: str) -> str:
         update_component_status("security", "success", f"Risk: {risk_level} | {secrets} secrets, {pii} PII")
         return json.dumps({"success": True, **result})
     except Exception as e:
+        log_runtime_error("security", "scan_security", str(e))
         update_component_status("security", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e), "risk_level": "unknown"})
 
@@ -405,6 +431,7 @@ def context_agent_tool(error_message: str, error_type: str = "unknown", language
         update_component_status("context", "success", f"Found {total_results} external resources")
         return json.dumps({"success": True, **result})
     except Exception as e:
+        log_runtime_error("context", "search_error_context", str(e))
         update_component_status("context", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e), "github_issues": [], "stackoverflow_questions": []})
 
@@ -430,6 +457,7 @@ def read_github_file_tool(repo_url: str, file_path: str, branch: str = "main") -
             update_component_status("github_file", "error", error=parsed.get('error', 'File not found'))
         return result
     except Exception as e:
+        log_runtime_error("github", "read_github_file", str(e))
         update_component_status("github_file", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e)})
 
@@ -486,6 +514,7 @@ def rootcause_agent_tool(
         update_component_status("rootcause", "success", f"{confidence}% confidence (LLM reasoning)")
         return json.dumps({"success": True, **result})
     except Exception as e:
+        log_runtime_error("rootcause", "analyze_root_cause", str(e))
         update_component_status("rootcause", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e), "root_cause": "unknown", "confidence": 0})
 
@@ -548,6 +577,7 @@ def fix_agent_tool(
         update_component_status("fix", "success", f"Generated {fix_type} fix")
         return json.dumps({"success": True, **result})
     except Exception as e:
+        log_runtime_error("fix", "generate_fix", str(e))
         update_component_status("fix", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e), "fix_type": "unknown"})
 
@@ -622,6 +652,7 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
         return json.dumps({"success": True, **result})
     except Exception as e:
         logger.error(f"❌ SUPERVISOR search_memory EXCEPTION: {str(e)}")
+        log_runtime_error("memory", "search_memory", str(e))
         update_component_status("memory", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e), "results": []})
 
@@ -664,6 +695,7 @@ def store_pattern(error_type: str, signature: str, root_cause: str, solution: st
         return json.dumps(result)
     except Exception as e:
         logger.error(f"❌ SUPERVISOR store_pattern EXCEPTION: {str(e)}")
+        log_runtime_error("memory", "store_pattern", str(e))
         return json.dumps({"error": str(e)})
 
 
@@ -695,6 +727,7 @@ def record_stats(error_type: str, language: str, resolved: bool = False) -> str:
         update_component_status("stats", "success", f"Recorded {error_type} occurrence")
         return json.dumps({"success": True, **result})
     except Exception as e:
+        log_runtime_error("stats", "record_stats", str(e))
         update_component_status("stats", "error", error=str(e))
         return json.dumps({"success": False, "error": str(e)})
 
@@ -711,6 +744,7 @@ def get_trend(error_type: str = "", window_days: int = 7) -> str:
         return json.dumps(result)
     except Exception as e:
         logger.error(f"❌ Stats Lambda error: {str(e)}")
+        log_runtime_error("stats", "get_trend", str(e))
         return json.dumps({"error": str(e)})
 
 
@@ -739,6 +773,7 @@ def update_context(section: str, data: str) -> str:
             "message": f"Context updated for {section}"
         })
     except Exception as e:
+        log_runtime_error("context", "update_context", str(e))
         return json.dumps({"success": False, "error": str(e)})
 
 
@@ -1784,9 +1819,10 @@ async def error_debugger(payload, context):
                     "sessionId": session_id,
                     "fastPath": True,
                     "fastPathElapsed": round(elapsed, 1),
+                    "_runtime_errors": session_context.get("_runtime_errors", []),
                 }
                 
-                logger.info(f"⚡ Fast path result yielded in {elapsed:.1f}s")
+                logger.info(f"⚡ Fast path result yielded in {elapsed:.1f}s (runtime_errors={len(final_result['_runtime_errors'])})")
                 yield json.dumps(final_result)
                 return  # Done! No need for full supervisor.
             else:
@@ -1883,14 +1919,21 @@ Follow the full analysis workflow with all agents.
             "agents": agents_data,
             "summary": summary,
             "eventCount": event_count,
-            "sessionId": session_id
+            "sessionId": session_id,
+            "_runtime_errors": session_context.get("_runtime_errors", []),
         }
         
+        runtime_err_count = len(final_result["_runtime_errors"])
         logger.info(f"🎯 Yielding final structured result with keys: {list(final_result.keys())}")
-        logger.info(f"🎯 Summary length: {len(str(summary))}")
+        logger.info(f"🎯 Summary length: {len(str(summary))}, runtime_errors: {runtime_err_count}")
+        if runtime_err_count > 0:
+            print(f"[SUPERVISOR] ⚠️ {runtime_err_count} runtime errors collected:")
+            for idx, err in enumerate(final_result["_runtime_errors"]):
+                print(f"  [{idx+1}] [{err['component']}] {err['operation']}: {err['error'][:200]}")
         yield json.dumps(final_result)
                 
     except Exception as e:
+        log_runtime_error("supervisor", "error_debugger", str(e), fatal=True)
         error_msg = f"❌ Error during analysis: {str(e)}"
         logger.error(error_msg)
         logger.error(traceback.format_exc())

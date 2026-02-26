@@ -377,6 +377,10 @@ def handler(event, context):
                         if final_result.get('fastPath'):
                             response_data['fastPath'] = True
                             response_data['fastPathElapsed'] = final_result.get('fastPathElapsed')
+                        # Propagate runtime errors to top level for frontend console
+                        if final_result.get('_runtime_errors'):
+                            response_data['_runtime_errors'] = final_result['_runtime_errors']
+                            logger.info(f"⚠️ Propagating {len(final_result['_runtime_errors'])} runtime errors to frontend")
                     elif final_message and isinstance(final_message, dict):
                         msg = final_message.get('message')
                         if isinstance(msg, dict):

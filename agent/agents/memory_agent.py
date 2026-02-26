@@ -25,12 +25,18 @@ logger = logging.getLogger(__name__)
 
 # Initialize Bedrock AgentCore client (only in live mode)
 bedrock_agentcore = None
+_memory_init_error = None
 if not DEMO_MODE:
     try:
         bedrock_agentcore = boto3.client('bedrock-agentcore')
         logger.info("✅ AgentCore Memory client initialized (bedrock-agentcore)")
+        print("[MEMORY_INIT] ✅ bedrock-agentcore client OK")
     except Exception as e:
+        _memory_init_error = str(e)
         logger.warning(f"⚠️ AgentCore client init failed: {e}")
+        print(f"[MEMORY_INIT] ❌ Client FAILED: {e}")
+else:
+    print("[MEMORY_INIT] 📦 DEMO_MODE — using local memory only")
 
 # Memory configuration
 MEMORY_ID = CONFIG_MEMORY_ID or os.environ.get('MEMORY_ID', '')
@@ -39,6 +45,7 @@ MEMORY_NAMESPACE = "error_patterns"  # Namespace for all error pattern records
 ACTOR_ID = "error_debugger"  # Actor ID for event-based storage
 
 logger.info(f"🧠 Memory config: DEMO_MODE={DEMO_MODE}, MEMORY_ID={'SET (' + MEMORY_ID[:12] + '...)' if MEMORY_ID else 'NOT SET'}, client={'OK' if bedrock_agentcore else 'NONE'}")
+print(f"[MEMORY_INIT] MEMORY_ID={'SET (' + MEMORY_ID[:12] + '...)' if MEMORY_ID else 'NOT SET'}, client={'OK' if bedrock_agentcore else 'NONE'}")
 
 
 class MemoryType:
@@ -62,14 +69,14 @@ def store_error_pattern(
     """
     Store an error pattern in LONG-TERM semantic memory.
     Enables learning from past errors to speed up future debugging.
-
+    
     Args:
         error_type: Classification of the error
         error_signature: Unique signature/hash of the error pattern
         root_cause: The identified root cause
         solution: The solution that worked
         language: Programming language
-
+    
     Returns:
         JSON confirmation of storage
     """
@@ -77,11 +84,11 @@ def store_error_pattern(
     logger.info(f"💾 MEMORY STORE: root_cause={root_cause[:100]}...")
     logger.info(f"💾 MEMORY STORE: solution={solution[:100]}...")
     print(f"[MEMORY_STORE] type={error_type}, lang={language}, sig={error_signature[:60]}")
-
+    
     # Generate content hash for deduplication
     content = f"{error_type}:{error_signature}:{root_cause}"
     content_hash = hashlib.md5(content.encode()).hexdigest()[:12]
-
+    
     pattern_data = {
         "error_type": error_type,
         "error_signature": error_signature,
@@ -106,7 +113,7 @@ def store_error_pattern(
     result = api_result if api_result.get("success") else local_result
     result["pattern_type"] = "error_pattern"
     result["content_hash"] = content_hash
-
+    
     logger.info(f"✅ MEMORY STORE COMPLETE: hash={content_hash}, mode={result.get('mode', 'local')}, local_count={len(_local_semantic_memory)}")
     print(f"[MEMORY_STORE] ✅ Complete: hash={content_hash}, mode={result.get('mode', 'local')}, api_success={api_result.get('success')}, local_count={len(_local_semantic_memory)}")
     return json.dumps(result)
@@ -117,33 +124,33 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
     """
     Search LONG-TERM memory for similar past errors.
     Uses AgentCore semantic search (retrieve_memory_records) plus local fallback.
-
+    
     Args:
         error_text: The current error to match against
         limit: Maximum number of results
-
+    
     Returns:
         JSON with matching past errors and their solutions
     """
     logger.info(f"🔎 MEMORY SEARCH: query={error_text[:120]}... (mode: {'DEMO' if DEMO_MODE else 'LIVE'}, local_patterns={len(_local_semantic_memory)})")
     print(f"[MEMORY_SEARCH] query={error_text[:80]}... mode={'DEMO' if DEMO_MODE else 'LIVE'}, local_patterns={len(_local_semantic_memory)}")
-
+    
     # Extract error_type and language from query if embedded
     detected_language = ""
     detected_error_type = ""
-
+    
     lang_match = re.search(r'\[(\w+)\]', error_text)
     if lang_match:
         detected_language = lang_match.group(1)
-
+    
     type_match = re.search(r'^(\w+(?:_?\w+)*):', error_text)
     if type_match:
         detected_error_type = type_match.group(1)
-
+    
     logger.info(f"🔎 MEMORY SEARCH: detected_language={detected_language}, detected_error_type={detected_error_type}")
 
     MIN_RELEVANCE_THRESHOLD = 50
-
+    
     # 1. Always search local memory (fast, within-process)
     local_results = _local_search(error_text, detected_error_type, detected_language, MIN_RELEVANCE_THRESHOLD)[:limit]
     logger.info(f"🔎 LOCAL SEARCH: {len(local_results)} results from {len(_local_semantic_memory)} patterns")
@@ -162,7 +169,7 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
         try:
             logger.info(f"🔎 API SEARCH: retrieve_memory_records(memoryId={MEMORY_ID[:12]}..., namespace={MEMORY_NAMESPACE}, query_len={len(error_text)}, topK={limit})")
             response = bedrock_agentcore.retrieve_memory_records(
-                memoryId=MEMORY_ID,
+            memoryId=MEMORY_ID,
                 namespace=MEMORY_NAMESPACE,
                 searchCriteria={
                     "searchQuery": error_text,
@@ -187,12 +194,12 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
                     parsed = _parse_record_text(text)
                     if not parsed:
                         logger.info(f"  → Skipped: could not parse record text")
-                        continue
-
+                    continue
+                
                     if score < MIN_RELEVANCE_THRESHOLD:
                         logger.info(f"  → Skipped: low relevance ({score} < {MIN_RELEVANCE_THRESHOLD})")
                         continue
-
+                
                     api_results.append({
                         "error_type": parsed.get("error_type", ""),
                         "root_cause": parsed.get("root_cause", ""),
@@ -206,15 +213,18 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
                     })
                 except Exception as parse_err:
                     logger.warning(f"  → Skipped: error parsing record #{idx+1}: {parse_err}")
-                    continue
-
+                continue
+        
             logger.info(f"🔎 API SEARCH: {len(api_results)} valid results after filtering")
-
-        except Exception as e:
-            api_error = str(e)
+        
+    except Exception as e:
+            api_error = f"{type(e).__name__}: {e}"
             logger.error(f"❌ API SEARCH FAILED: {api_error}")
+            print(f"[MEMORY_SEARCH] ❌ API FAILED: {api_error}")
     else:
-        logger.warning(f"⚠️ API SEARCH skipped: MEMORY_ID={'SET' if MEMORY_ID else 'EMPTY'}, client={'OK' if bedrock_agentcore else 'NONE'}")
+        skip_reason = f"MEMORY_ID={'SET' if MEMORY_ID else 'EMPTY'}, client={'OK' if bedrock_agentcore else 'NONE'}"
+        logger.warning(f"⚠️ API SEARCH skipped: {skip_reason}")
+        print(f"[MEMORY_SEARCH] ⚠️ API skipped: {skip_reason}")
 
     return _build_search_response(local_results, api_results, error_text, MIN_RELEVANCE_THRESHOLD, api_error=api_error)
 
@@ -223,21 +233,21 @@ def search_similar_errors(error_text: str, limit: int = 5) -> str:
 def store_session_context(context_type: str, content: str) -> str:
     """
     Store context in SHORT-TERM session memory via create_event().
-
+    
     Args:
         context_type: Type of context (current_error, hypothesis, user_info)
         content: The content to store (JSON string or plain text)
-
+    
     Returns:
         JSON confirmation
     """
     logger.info(f"📝 Storing session context: {context_type}")
-
+    
     try:
         content_dict = json.loads(content) if content.startswith('{') else {"text": content}
     except Exception:
         content_dict = {"text": content}
-
+    
     # Store locally
     _local_session_memory[context_type] = {
         "context_type": context_type,
@@ -265,6 +275,7 @@ def store_session_context(context_type: str, content: str) -> str:
             return json.dumps({"success": True, "memory_type": "SHORT-TERM (event)", "context_type": context_type, "mode": "live"})
         except Exception as e:
             logger.error(f"❌ Session context store failed: {e}")
+            print(f"[MEMORY_EVENT] ❌ create_event failed for {context_type}: {type(e).__name__}: {e}")
 
     logger.info(f"✅ Session context stored locally: {context_type}")
     return json.dumps({"success": True, "memory_type": "SHORT-TERM (local)", "context_type": context_type, "mode": "local"})
@@ -274,43 +285,43 @@ def store_session_context(context_type: str, content: str) -> str:
 def get_session_context(context_type: str = "") -> str:
     """
     Retrieve context from SHORT-TERM session memory.
-
+    
     Args:
         context_type: Optional filter by context type
-
+    
     Returns:
         JSON with session context
     """
     logger.info(f"🔍 Retrieving session context: {context_type or 'all'}")
-
+    
     # For now, use local session memory (events API requires sessionId+actorId)
     if context_type and context_type in _local_session_memory:
         events = [_local_session_memory[context_type]]
     else:
         events = list(_local_session_memory.values())
 
-    return json.dumps({
-        "success": True,
+        return json.dumps({
+            "success": True,
         "memory_type": "SHORT-TERM (local)",
-        "session_id": SESSION_ID[:8] + "...",
-        "count": len(events),
-        "events": events,
-    })
+            "session_id": SESSION_ID[:8] + "...",
+            "count": len(events),
+            "events": events,
+        })
 
 
 @tool(name="increment_solution_success")
 def increment_solution_success(error_signature: str) -> str:
     """
     Increment the success count for a solution that worked.
-
+    
     Args:
         error_signature: The error pattern signature to update
-
+    
     Returns:
         JSON confirmation
     """
     logger.info(f"📈 Incrementing success count for: {error_signature}")
-
+    
     for pattern in _local_semantic_memory:
         if pattern.get('error_signature') == error_signature:
             pattern['success_count'] = pattern.get('success_count', 1) + 1
@@ -375,7 +386,9 @@ def _store_to_agentcore_records(pattern_data: Dict[str, Any]) -> Dict[str, Any]:
     Records are immediately searchable via retrieve_memory_records().
     """
     if DEMO_MODE or not MEMORY_ID or not bedrock_agentcore:
-        logger.info(f"⏭️ Skipping API record store (DEMO={DEMO_MODE}, MEMORY_ID={'SET' if MEMORY_ID else 'EMPTY'}, client={'OK' if bedrock_agentcore else 'NONE'})")
+        reason = f"DEMO={DEMO_MODE}, MEMORY_ID={'SET' if MEMORY_ID else 'EMPTY'}, client={'OK' if bedrock_agentcore else 'NONE'}"
+        logger.info(f"⏭️ Skipping API record store ({reason})")
+        print(f"[MEMORY_STORE] ⏭️ API store skipped: {reason}")
         return {"success": False, "mode": "skipped"}
 
     try:
@@ -413,13 +426,15 @@ def _store_to_agentcore_records(pattern_data: Dict[str, Any]) -> Dict[str, Any]:
             "also_stored_locally": True,
             "local_count": len(_local_semantic_memory),
         }
-
+        
     except Exception as e:
-        logger.error(f"❌ API STORE FAILED: {str(e)}")
+        err = f"{type(e).__name__}: {e}"
+        logger.error(f"❌ API STORE FAILED: {err}")
+        print(f"[MEMORY_STORE] ❌ batch_create_memory_records FAILED: {err}")
         return {
             "success": False,
             "mode": "local_only",
-            "api_error": str(e),
+            "api_error": err,
             "also_stored_locally": True,
             "local_count": len(_local_semantic_memory),
         }
@@ -453,6 +468,7 @@ def _store_as_event(pattern_data: Dict[str, Any]) -> None:
     except Exception as e:
         # Non-critical — the memory record is the primary store
         logger.warning(f"⚠️ Event store failed (non-critical): {e}")
+        print(f"[MEMORY_EVENT] ⚠️ create_event failed (non-critical): {type(e).__name__}: {e}")
 
 
 def _build_search_response(
@@ -557,13 +573,13 @@ def _local_search(query: str, error_type: str = "", language: str = "", min_scor
     if not _local_semantic_memory:
         logger.info("🔎 Local search: memory is empty (0 patterns)")
         return []
-
+    
     logger.info(f"🔎 Local search: Scanning {len(_local_semantic_memory)} patterns")
 
     query_normalized = _normalize(query)
     query_terms = {w for w in query_normalized.split() if len(w) > 3}
     results = []
-
+    
     for idx, pattern in enumerate(_local_semantic_memory):
         score = 0
         breakdown = []
@@ -621,7 +637,7 @@ def _local_search(query: str, error_type: str = "", language: str = "", min_scor
 
         # Don't cap score here — keep raw score for accurate ranking
         # Cap to 100 only when returning to caller
-
+        
         if score >= min_score:
             logger.info(f"  ✅ #{idx} MATCH: score={score}, type={pattern.get('error_type')}, [{', '.join(breakdown)}]")
             results.append({
@@ -665,7 +681,7 @@ Store solutions that worked and find relevant past errors.
 - Purpose: Current debugging session state
 - Examples: current error, hypotheses, user context
 
-### LONG-TERM (Semantic Memory)
+### LONG-TERM (Semantic Memory)  
 - TTL: Persistent (30+ days)
 - Purpose: Error patterns and solutions
 - Examples: error_type -> root_cause -> solution mappings
@@ -678,7 +694,7 @@ Always return valid JSON only, no additional text.
 
 memory_agent = Agent(
     system_prompt=MEMORY_AGENT_PROMPT,
-    tools=[store_error_pattern, search_similar_errors, store_session_context,
+    tools=[store_error_pattern, search_similar_errors, store_session_context, 
            get_session_context, increment_solution_success],
 )
 
@@ -696,7 +712,7 @@ def search(query: str, limit: int = 5, **kwargs) -> Dict[str, Any]:
     return result
 
 
-def store_pattern(error_type: str, signature: str, root_cause: str,
+def store_pattern(error_type: str, signature: str, root_cause: str, 
                   solution: str, language: str = "unknown") -> Dict[str, Any]:
     """Store an error pattern."""
     logger.info(f"🧠 memory_agent.store_pattern() called: type={error_type}, lang={language}")

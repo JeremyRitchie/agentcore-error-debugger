@@ -820,6 +820,7 @@ function displayResults(result) {
             <h3>📊 Analysis Metrics</h3>
             <p class="result-text">
                 ${result.fastPath ? `<span class="result-badge positive" style="margin-bottom: 8px; display: inline-block;">⚡ Memory Fast Path — ${result.fastPathElapsed || execTime}s</span><br>` : ''}
+                ${(result.runtimeErrors?.length > 0) ? `<span class="result-badge negative" style="margin-bottom: 8px; display: inline-block;">⚠️ ${result.runtimeErrors.length} Runtime Error(s) — check console</span><br>` : ''}
                 <strong>Agents Used:</strong> ${state.agentsUsed}<br>
                 <strong>Tool Calls:</strong> ${state.toolsUsed}<br>
                 <strong>Execution Time:</strong> ${execTime}s
@@ -1032,6 +1033,21 @@ async function callAgentCoreBackend(errorText) {
         const fastPathElapsed = data.fastPathElapsed || data.fullResponse?.fastPathElapsed;
         if (isFastPath) {
             console.log(`⚡ FAST PATH result received! Resolved from memory in ${fastPathElapsed}s`);
+        }
+        
+        // ── Runtime Error Log ─────────────────────────────────────────
+        // Every failure in the runtime (Gateway calls, memory API, tool exceptions)
+        // is collected and sent here for visibility.
+        const runtimeErrors = data._runtime_errors || data.fullResponse?._runtime_errors || [];
+        if (runtimeErrors.length > 0) {
+            console.group(`🚨 RUNTIME ERRORS: ${runtimeErrors.length} failure(s) during analysis`);
+            runtimeErrors.forEach((err, i) => {
+                const icon = err.fatal ? '💀' : '❌';
+                console.error(`  ${icon} [${err.component}] ${err.operation}: ${err.error}`);
+            });
+            console.groupEnd();
+        } else {
+            console.log('✅ No runtime errors reported');
         }
         
         // Normalize response structure - agents might be at top level or inside fullResponse
@@ -1462,6 +1478,7 @@ async function callAgentCoreBackend(errorText) {
         // Track whether this was a memory fast-path result
         result.fastPath = data.fastPath || data.fullResponse?.fastPath || false;
         result.fastPathElapsed = data.fastPathElapsed || data.fullResponse?.fastPathElapsed || null;
+        result.runtimeErrors = runtimeErrors;
         
         // Count agents and tools from the response
         if (data.agents) {
@@ -1481,7 +1498,7 @@ async function callAgentCoreBackend(errorText) {
                 ? agentCount  // Each agent = 1 direct call on fast path
                 : Math.max(agentCount * 2, Math.floor((data.eventCount || 0) / 500));
             
-            console.log(`📊 Agents used: ${state.agentsUsed}, Tool calls: ${state.toolsUsed}, fastPath: ${data.fastPath}`);
+            console.log(`📊 Agents used: ${state.agentsUsed}, Tool calls: ${state.toolsUsed}, fastPath: ${data.fastPath || data.fullResponse?.fastPath || false}, runtimeErrors: ${runtimeErrors.length}`);
         }
         
         // Store raw response for debugging

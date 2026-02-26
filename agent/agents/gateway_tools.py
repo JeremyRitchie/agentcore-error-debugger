@@ -22,12 +22,21 @@ GATEWAY_ID = os.environ.get('GATEWAY_ID', '')
 
 # Initialize Gateway client (only in live mode)
 gateway_client = None
+_init_error = None
 if not DEMO_MODE and GATEWAY_ID:
     try:
         gateway_client = boto3.client('bedrock-agentcore')
         logger.info(f"✅ Gateway client initialized: {GATEWAY_ID[:20]}...")
+        print(f"[GATEWAY_INIT] ✅ Client OK, GATEWAY_ID={GATEWAY_ID[:20]}...")
     except Exception as e:
+        _init_error = str(e)
         logger.warning(f"⚠️ Gateway client init failed: {e}")
+        print(f"[GATEWAY_INIT] ❌ Client FAILED: {e}")
+elif not DEMO_MODE and not GATEWAY_ID:
+    _init_error = "GATEWAY_ID environment variable is empty/missing"
+    print(f"[GATEWAY_INIT] ⚠️ GATEWAY_ID not set — will use demo/simulated mode")
+elif DEMO_MODE:
+    print(f"[GATEWAY_INIT] 📦 DEMO_MODE=true — using simulated tools")
 
 
 class GatewayTools:
@@ -49,11 +58,27 @@ class GatewayTools:
         Returns:
             Tool response as dict
         """
-        if DEMO_MODE or not gateway_client:
-            logger.info(f"📦 Demo mode: Simulating {tool_name}")
+        # Log the runtime error collector (import here to avoid circular import)
+        def _log_error(msg):
+            try:
+                from supervisor import log_runtime_error
+                log_runtime_error("gateway", tool_name, msg)
+            except Exception:
+                print(f"[RUNTIME_ERROR] [gateway] {tool_name}: {msg}")
+        
+        if DEMO_MODE:
+            print(f"[GATEWAY] 📦 DEMO mode: simulating {tool_name}")
+            return GatewayTools._simulate_tool(tool_name, params)
+        
+        if not gateway_client:
+            reason = _init_error or "gateway_client is None (GATEWAY_ID missing or client init failed)"
+            msg = f"Gateway client not available for {tool_name}: {reason}"
+            print(f"[GATEWAY] ❌ {msg}")
+            _log_error(msg)
             return GatewayTools._simulate_tool(tool_name, params)
         
         try:
+            print(f"[GATEWAY] 🌐 Calling {tool_name} via Gateway (GATEWAY_ID={GATEWAY_ID[:16]}...)")
             logger.info(f"🌐 Calling Gateway tool: {tool_name}")
             
             response = gateway_client.invoke_gateway(
@@ -63,16 +88,24 @@ class GatewayTools:
             )
             
             result = json.loads(response.get('toolOutput', '{}'))
+            print(f"[GATEWAY] ✅ {tool_name} completed")
             logger.info(f"✅ Gateway tool {tool_name} completed")
             return result
             
         except Exception as e:
-            logger.error(f"❌ Gateway call failed for {tool_name}: {e}")
-            # NO FALLBACK - return the error so frontend can display it
+            error_type = type(e).__name__
+            error_msg = f"Gateway call failed for {tool_name}: [{error_type}] {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            print(f"[GATEWAY] ❌ {error_msg}")
+            _log_error(error_msg)
+            
+            # Return error structure so caller knows what failed
             return {
                 "success": False,
                 "error": f"Gateway call failed: {str(e)}",
+                "error_type": error_type,
                 "tool": tool_name,
+                "gateway_id": GATEWAY_ID[:16] + "..." if GATEWAY_ID else "NOT_SET",
                 "message": "The Lambda tool could not be invoked. Check Gateway configuration and Lambda permissions."
             }
     

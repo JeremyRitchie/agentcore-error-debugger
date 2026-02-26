@@ -43,3 +43,10 @@ def get_mode_string() -> str:
     """Return a string describing the current mode."""
     return "DEMO" if DEMO_MODE else "LIVE"
 
+
+# Print startup config for CloudWatch (print() always reaches CW stdout)
+print(f"[CONFIG] DEMO_MODE={DEMO_MODE}, FEATURE_PART={FEATURE_PART}, REGION={AWS_REGION}")
+print(f"[CONFIG] MODEL={BEDROCK_MODEL_ID}")
+print(f"[CONFIG] MEMORY_ID={'SET (' + MEMORY_ID[:12] + '...)' if MEMORY_ID else 'NOT SET'}")
+print(f"[CONFIG] GATEWAY_ID={os.environ.get('GATEWAY_ID', 'NOT SET')[:20]}")
+

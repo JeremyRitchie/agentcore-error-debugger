@@ -1578,6 +1578,21 @@ def _quick_parse(error_text: str) -> dict:
     return result
 
 
+def _get_bedrock_runtime_client():
+    """Get or create the bedrock-runtime client for LLM enrichment calls."""
+    import boto3
+    if not hasattr(_get_bedrock_runtime_client, '_client'):
+        try:
+            _get_bedrock_runtime_client._client = boto3.client(
+                'bedrock-runtime', region_name=AWS_REGION
+            )
+            print(f"[ENRICH] ✅ bedrock-runtime client created (region={AWS_REGION})")
+        except Exception as e:
+            print(f"[ENRICH] ❌ bedrock-runtime client FAILED: {e}")
+            _get_bedrock_runtime_client._client = None
+    return _get_bedrock_runtime_client._client
+
+
 def _enrich_from_memory(error_text: str, parsed: dict, best_match: dict) -> dict:
     """
     Make ONE Bedrock LLM call to enrich a raw memory match into a full-quality response.
@@ -1586,7 +1601,7 @@ def _enrich_from_memory(error_text: str, parsed: dict, best_match: dict) -> dict
     Returns enriched dict with: analysis, fix, confidence, prevention.
     Falls back to raw memory data on any failure.
     """
-    import boto3
+    import time as _time
     from agents.config import BEDROCK_MODEL_ID, DEMO_MODE
     
     stored_solution = best_match.get("solution", "")
@@ -1595,8 +1610,12 @@ def _enrich_from_memory(error_text: str, parsed: dict, best_match: dict) -> dict
     error_type = parsed.get("error_type", "unknown")
     relevance = best_match.get("relevance_score", 75)
     
+    print(f"[ENRICH] Starting enrichment: lang={language}, type={error_type}, "
+          f"relevance={relevance}%, demo={DEMO_MODE}")
+    
     # In demo mode, return synthetic enriched data
     if DEMO_MODE:
+        print(f"[ENRICH] Demo mode — returning synthetic enrichment")
         return {
             "root_cause": stored_root_cause or f"Known {error_type} error in {language}",
             "explanation": f"This is a well-known {error_type} error. {stored_root_cause}",
@@ -1611,10 +1630,16 @@ def _enrich_from_memory(error_text: str, parsed: dict, best_match: dict) -> dict
             "enriched": True,
         }
     
-    try:
-        bedrock = boto3.client('bedrock-runtime', region_name=AWS_REGION)
-        
-        prompt = f"""You are an expert software debugging assistant. A user has encountered an error that we've seen before. 
+    # Get the shared bedrock-runtime client
+    bedrock = _get_bedrock_runtime_client()
+    if not bedrock:
+        msg = "bedrock-runtime client not available"
+        print(f"[ENRICH] ❌ {msg}")
+        log_runtime_error("enrichment", "client_init", msg)
+        # Fall through to fallback below
+    else:
+        try:
+            prompt = f"""You are an expert software debugging assistant. A user has encountered an error that we've seen before. 
 Using the stored solution and root cause from our memory, generate a COMPLETE, HIGH-QUALITY analysis.
 
 ## Error Information
@@ -1647,50 +1672,51 @@ Respond with ONLY valid JSON:
   "prevention": ["how to prevent this in the future"]
 }}"""
 
-        logger.info(f"⚡ LLM enrichment call starting (model={BEDROCK_MODEL_ID})")
-        print(f"[FAST_PATH] Calling LLM for enrichment...")
-        enrich_start = __import__('time').time()
-        
-        response = bedrock.invoke_model(
-            modelId=BEDROCK_MODEL_ID,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 1500,
-                "temperature": 0.1,
-                "messages": [{"role": "user", "content": prompt}]
-            })
-        )
-        
-        response_body = json.loads(response['body'].read())
-        content = response_body.get('content', [{}])[0].get('text', '{}')
-        
-        enrich_elapsed = __import__('time').time() - enrich_start
-        logger.info(f"⚡ LLM enrichment response in {enrich_elapsed:.1f}s")
-        print(f"[FAST_PATH] LLM enrichment done in {enrich_elapsed:.1f}s")
-        
-        # Parse JSON from response
-        start = content.find('{')
-        end = content.rfind('}') + 1
-        if start != -1 and end > start:
-            enriched = json.loads(content[start:end])
-            enriched["enriched"] = True
-            enriched["enrich_time"] = round(enrich_elapsed, 1)
-            logger.info(f"⚡ Enrichment parsed: confidence={enriched.get('confidence', '?')}%, "
-                       f"fix_type={enriched.get('fix_type', '?')}")
-            print(f"[FAST_PATH] Enrichment: confidence={enriched.get('confidence', '?')}%, "
-                  f"fix_type={enriched.get('fix_type', '?')}")
-            return enriched
-        
-        logger.warning(f"⚡ LLM enrichment response not parseable, using raw memory")
-        print(f"[FAST_PATH] LLM response not JSON, falling back to raw memory")
-        
-    except Exception as e:
-        logger.error(f"⚡ LLM enrichment failed: {e}")
-        print(f"[FAST_PATH] LLM enrichment failed: {e} — using raw memory data")
+            print(f"[ENRICH] Calling invoke_model (model={BEDROCK_MODEL_ID})...")
+            enrich_start = _time.time()
+            
+            response = bedrock.invoke_model(
+                modelId=BEDROCK_MODEL_ID,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 1500,
+                    "temperature": 0.1,
+                    "messages": [{"role": "user", "content": prompt}]
+                })
+            )
+            
+            response_body = json.loads(response['body'].read())
+            content = response_body.get('content', [{}])[0].get('text', '{}')
+            
+            enrich_elapsed = _time.time() - enrich_start
+            print(f"[ENRICH] ✅ LLM responded in {enrich_elapsed:.1f}s, "
+                  f"content_len={len(content)}")
+            
+            # Parse JSON from response
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            if start != -1 and end > start:
+                enriched = json.loads(content[start:end])
+                enriched["enriched"] = True
+                enriched["enrich_time"] = round(enrich_elapsed, 1)
+                print(f"[ENRICH] ✅ Parsed: confidence={enriched.get('confidence', '?')}%, "
+                      f"fix_type={enriched.get('fix_type', '?')}, "
+                      f"has_fixed_code={bool(enriched.get('fixed_code'))}")
+                return enriched
+            
+            msg = f"LLM response not parseable JSON (len={len(content)}, first100={content[:100]})"
+            print(f"[ENRICH] ⚠️ {msg}")
+            log_runtime_error("enrichment", "parse_response", msg)
+            
+        except Exception as e:
+            msg = f"{type(e).__name__}: {e}"
+            print(f"[ENRICH] ❌ LLM call failed: {msg}")
+            log_runtime_error("enrichment", "invoke_model", msg)
     
-    # Fallback: raw memory data (same as before)
+    # Fallback: raw memory data (same quality as before enrichment was added)
+    print(f"[ENRICH] Using raw memory fallback (no LLM enrichment)")
     return {
         "root_cause": stored_root_cause,
         "explanation": f"Resolved from memory ({relevance}% match).",
@@ -1973,6 +1999,8 @@ async def error_debugger(payload, context):
                     "sessionId": session_id,
                     "fastPath": True,
                     "fastPathElapsed": round(elapsed, 1),
+                    "agentsUsed": 2,   # memory search + LLM enrichment
+                    "toolsUsed": 3,    # regex parse + memory search + LLM enrich
                     "_runtime_errors": session_context.get("_runtime_errors", []),
                 }
                 

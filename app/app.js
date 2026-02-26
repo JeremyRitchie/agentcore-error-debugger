@@ -1499,10 +1499,10 @@ async function callAgentCoreBackend(errorText) {
                     agentCount++;
                 }
             }
-            if (data.fastPath) {
-                // Fast path: 1 regex parse + 1 memory search + 1 LLM enrichment = 3 operations
-                state.agentsUsed = 2; // Memory + LLM enrichment
-                state.toolsUsed = 3;  // parse + memory_search + llm_enrich
+            if (data.fastPath || data.fullResponse?.fastPath) {
+                // Use accurate counts from backend if available, else defaults
+                state.agentsUsed = data.agentsUsed || data.fullResponse?.agentsUsed || 2;
+                state.toolsUsed = data.toolsUsed || data.fullResponse?.toolsUsed || 3;
             } else {
                 state.agentsUsed = agentCount + 1; // +1 for supervisor
                 state.toolsUsed = Math.max(agentCount * 2, Math.floor((data.eventCount || 0) / 500));

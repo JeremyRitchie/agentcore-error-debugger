@@ -377,6 +377,10 @@ def handler(event, context):
                         if final_result.get('fastPath'):
                             response_data['fastPath'] = True
                             response_data['fastPathElapsed'] = final_result.get('fastPathElapsed')
+                            # Use accurate counts from the supervisor, not stream event counts
+                            response_data['agentsUsed'] = final_result.get('agentsUsed', 2)
+                            response_data['toolsUsed'] = final_result.get('toolsUsed', 3)
+                            logger.info(f"⚡ Fast path: agents={response_data['agentsUsed']}, tools={response_data['toolsUsed']}")
                         # Propagate runtime errors to top level for frontend console
                         if final_result.get('_runtime_errors'):
                             response_data['_runtime_errors'] = final_result['_runtime_errors']

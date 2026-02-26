@@ -1674,23 +1674,24 @@ Respond with ONLY valid JSON:
   "prevention": ["how to prevent this in the future"]
 }}"""
 
-            print(f"[ENRICH] Calling invoke_model (model={BEDROCK_MODEL_ID})...")
+            # Use cross-region inference profile (required for newer models)
+            inference_profile_id = f"us.{BEDROCK_MODEL_ID}" if not BEDROCK_MODEL_ID.startswith("us.") else BEDROCK_MODEL_ID
+            print(f"[ENRICH] Calling converse (model={inference_profile_id})...")
             enrich_start = _time.time()
             
-            response = bedrock.invoke_model(
-                modelId=BEDROCK_MODEL_ID,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps({
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 1500,
+            response = bedrock.converse(
+                modelId=inference_profile_id,
+                messages=[{
+                    "role": "user",
+                    "content": [{"text": prompt}]
+                }],
+                inferenceConfig={
+                    "maxTokens": 1500,
                     "temperature": 0.1,
-                    "messages": [{"role": "user", "content": prompt}]
-                })
+                }
             )
             
-            response_body = json.loads(response['body'].read())
-            content = response_body.get('content', [{}])[0].get('text', '{}')
+            content = response['output']['message']['content'][0]['text']
             
             enrich_elapsed = _time.time() - enrich_start
             print(f"[ENRICH] ✅ LLM responded in {enrich_elapsed:.1f}s, "

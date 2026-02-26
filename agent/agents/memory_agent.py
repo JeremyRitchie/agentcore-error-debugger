@@ -252,7 +252,7 @@ def store_session_context(context_type: str, content: str) -> str:
                 eventTimestamp=datetime.utcnow(),
                 payload=[{
                     "conversational": {
-                        "role": "assistant",
+                        "role": "ASSISTANT",
                         "content": {"text": json.dumps({"context_type": context_type, **content_dict})},
                     }
                 }],
@@ -440,7 +440,7 @@ def _store_as_event(pattern_data: Dict[str, Any]) -> None:
             eventTimestamp=datetime.utcnow(),
             payload=[{
                 "conversational": {
-                    "role": "assistant",
+                    "role": "ASSISTANT",
                     "content": {"text": event_text},
                 }
             }],

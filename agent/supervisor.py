@@ -557,12 +557,17 @@ def fix_agent_tool(
 # ============================================================================
 @tool(
     name="search_memory",
-    description="""Search LONG-TERM memory for similar past errors.
+    description="""Search LONG-TERM memory for similar past errors. Call this AFTER parsing
+    so you know the language and error type — this lets you judge if matches are truly relevant.
     
-    Uses AgentCore semantic search to find relevant debugging history and known solutions.
+    If a high-similarity match (>0.7) is found with a working solution, you can SKIP external
+    research and root cause analysis entirely — go straight to fix generation using the
+    remembered solution. This is how memory accelerates problem solving.
     
-    TIP: Include language and error_type in the search text for better results.
-    Example: "python import_error: No module named 'requests'" instead of just the error."""
+    If no relevant match is found, ignore memory and proceed with full analysis.
+    
+    TIP: Include language and error_type for targeted results.
+    Example: "python import_error: No module named 'requests'" not just the raw error."""
 )
 def search_memory(error_text: str, limit: int = 5, language: str = "", error_type: str = "") -> str:
     """Search AgentCore memory for similar errors with context."""
@@ -1139,15 +1144,55 @@ Only produce final output when:
 
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| `parser_agent_tool` | Extract language, error type, stack trace | ALWAYS first |
-| `security_agent_tool` | Detect PII/secrets | Before storing anything |
-| `search_memory` | Find similar past errors | Early - might have instant solution |
-| `context_agent_tool` | Search GitHub/StackOverflow | After parsing, for external solutions |
-| `read_github_file_tool` | Read source code from repo | When stack trace references a file |
-| `rootcause_agent_tool` | LLM reasoning with all context | After gathering ALL context |
-| `fix_agent_tool` | Generate code fix | After root cause is determined |
-| `record_stats` | Track statistics | At the end |
-| `store_pattern` | Save solution to memory | When confident solution works |
+| `parser_agent_tool` | Extract language, error type, stack trace | ALWAYS first — understand the error |
+| `security_agent_tool` | Detect PII/secrets | After parsing, before storing anything |
+| `search_memory` | Find similar past errors | After parsing — the decision gate |
+| `context_agent_tool` | Search GitHub/StackOverflow | Only if memory has no relevant match |
+| `read_github_file_tool` | Read source code from repo | Only if memory has no match AND stack trace references a file |
+| `rootcause_agent_tool` | LLM reasoning with all context | Only if memory has no relevant match |
+| `fix_agent_tool` | Generate code fix | Always — either from memory solution or fresh root cause |
+| `record_stats` | Track statistics | At the end, always |
+| `store_pattern` | Save solution to memory | At the end, always — this is how you learn |
+
+# ⚡ THE TWO-PATH STRATEGY: Memory is Your Accelerator
+
+The entire purpose of memory is to **vastly speed up** problem solving when you've seen
+something similar before. After you understand what the error IS, memory is the decision
+gate that determines which path you take:
+
+```
+                    ┌──────────────┐
+                    │  1. PARSE    │  Understand the error first
+                    │  2. SECURITY │  (language, type, structure)
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+                    │ 3. MEMORY    │  Search with language + error_type + message
+                    │    SEARCH    │
+                    └──────┬───────┘
+                           │
+              ┌────────────┴────────────┐
+              │                         │
+     MATCH FOUND (>0.7)          NO RELEVANT MATCH
+     with a solution              or low similarity
+              │                         │
+     ┌────────▼────────┐      ┌────────▼────────┐
+     │  ⚡ FAST PATH   │      │  🔍 FULL PATH   │
+     │                 │      │                  │
+     │  Skip to FIX    │      │  4. CONTEXT      │
+     │  using the      │      │  5. ROOT CAUSE   │
+     │  remembered     │      │  6. FIX          │
+     │  solution as    │      │                  │
+     │  guidance       │      │  (Full analysis) │
+     └────────┬────────┘      └────────┬─────────┘
+              │                         │
+              └────────────┬────────────┘
+                           │
+                    ┌──────▼───────┐
+                    │ 7. STORE     │  ALWAYS save what you learned
+                    │ 8. STATS     │  (even on fast path — reinforces the pattern)
+                    └──────────────┘
+```
 
 # THINKING PROCESS
 
@@ -1159,6 +1204,7 @@ What I know so far:
 - Language: [known/unknown]
 - Error type: [known/unknown]
 - Root cause: [hypothesis/unknown]
+- Memory match: [yes/no/not searched yet]
 - Confidence: [0-100]%
 
 What I need to find out:
@@ -1182,70 +1228,117 @@ Should I continue gathering info or am I ready to conclude?
 
 # RECOMMENDED WORKFLOW
 
-## Phase 1: Initial Information Gathering
+## Phase 1: Understand the Error
 
 1. **PARSE** the error to get structured data
+   - Extract: language, error_type, core message, stack frames, file paths
    - If language is "unknown", look at the error patterns yourself
    - If error_type is "unknown", classify it based on keywords
 
-2. **SECURITY** scan (parallel) - check for PII/secrets
+2. **SECURITY** scan - check for PII/secrets before anything is stored
 
-3. **MEMORY** search - check for similar past errors
-   - If high-similarity match found (>0.8), you might be done early!
+## Phase 2: Memory Decision Gate
 
-## Phase 2: External Research (if needed)
+3. **SEARCH MEMORY** using language + error_type + core error message
+   - Pass the language and error_type you just learned from parsing
+   - This makes the search targeted so you can judge if results are truly relevant
+
+   **Evaluate the results critically:**
+   - Is the matched error actually the SAME type of problem? (not just similar words)
+   - Does the stored solution apply to this specific situation?
+   - Is the similarity score high enough (>0.7)?
+
+### ⚡ FAST PATH — Memory match is relevant
+
+If memory returned a match that is clearly the same type of error with a working solution:
+- Your confidence should already be high (≥80%)
+- Go directly to **FIX generation**, using the remembered root cause and solution as the basis
+- You do NOT need to run context_agent_tool or rootcause_agent_tool
+- This is the speed advantage of memory — skip expensive external research
+
+### 🔍 FULL PATH — No relevant memory match
+
+If memory returned no results, or the results don't actually match your problem:
+- **Forget about memory for now** — it has nothing useful for this error
+- Proceed with full analysis (Phase 3 below)
+
+## Phase 3: Full Analysis (only on FULL PATH)
 
 4. **CONTEXT** search with good search terms
    - Use the actual error message, not generic terms
    - If 0 results, try different search terms
    - If stack trace mentions a GitHub repo, consider reading the file
 
-## Phase 3: Reasoning (with ALL context)
-
 5. **ROOT CAUSE** analysis
-   - Pass ALL context gathered: parsed info, external findings, memory matches
+   - Pass ALL context gathered: parsed info, external findings
    - If confidence < 80%, consider gathering more context
    - If the root cause seems wrong, question it
 
-## Phase 4: Solution (only when confident)
+## Phase 4: Solution
 
 6. **FIX** generation
+   - On FAST PATH: use the remembered solution as guidance, adapt it to the specific error
+   - On FULL PATH: generate from scratch based on root cause analysis
    - Must match the detected language
    - Must address the identified root cause
-   - If the fix seems generic or wrong, reconsider
 
-## Phase 5: Learn and Record (ALWAYS do this)
+## Phase 5: Learn and Record (ALWAYS — both paths)
 
-7. **STORE PATTERN** in memory - ALWAYS call `store_pattern` with the error type, a signature, root cause, solution, and language.
-   This is how the system LEARNS. Future analyses will find this pattern via `search_memory`.
+7. **STORE PATTERN** in memory — ALWAYS call `store_pattern` with the error type,
+   a signature (the core error message), root cause, solution, and language.
+   This is how the system LEARNS. Every error you solve makes future solves faster.
+   On the fast path, this reinforces the pattern. On the full path, this teaches a new one.
 
-8. **RECORD STATS** - call `record_stats` to track this error type
+8. **RECORD STATS** — call `record_stats` to track this error type
 
 # ITERATION EXAMPLES
 
-## Example 1: Low Confidence → Gather More
+## Example 1: Memory Hit → Fast Path
 ```
 <thinking>
-Parser returned language: unknown, error_type: unknown
-Confidence: 20%
-I need more information. Let me look at the error patterns myself.
-The error mentions ".tf line 94" and "resource" - this is Terraform!
+Parser says: Python, ImportError, "No module named 'requests'"
+Let me check memory for this exact pattern.
 </thinking>
 
-I'll re-interpret: this is a Terraform config_error. Now let me search for context...
+search_memory("python import_error: No module named 'requests'", language="python", error_type="import_error")
+
+<reflection>
+Memory returned a match with 0.92 similarity!
+Stored solution: "pip install requests" or add to requirements.txt
+This is clearly the same problem. Confidence: 95%
+I can skip external research and go straight to generating the fix.
+</reflection>
 ```
 
-## Example 2: Poor Search Results → Retry
+## Example 2: Memory Miss → Full Path
 ```
+<thinking>
+Parser says: Terraform, config_error at gateway.tf line 94
+Let me check memory.
+</thinking>
+
+search_memory("terraform config_error: Unsupported block type", language="terraform", error_type="config_error")
+
 <reflection>
-Context search returned 0 GitHub issues.
-Search term was too generic. Let me try with the specific error message.
+Memory returned 0 results. This is a new error pattern.
+Forget memory — I need to do full analysis.
+Let me search for context on this Terraform error.
 </reflection>
 
 context_agent_tool(error_message="Unsupported block type logging_configuration", ...)
 ```
 
-## Example 3: Uncertain Root Cause → Dig Deeper
+## Example 3: Memory Match but NOT Relevant → Full Path
+```
+<reflection>
+Memory returned a match (0.6 similarity) for a different Python import error.
+But that was about 'numpy' version conflicts, and my error is about a missing
+custom module 'myapp.utils'. The stored solution doesn't apply here.
+This is NOT a fast-path case — I need full analysis.
+</reflection>
+```
+
+## Example 4: Uncertain Root Cause → Dig Deeper
 ```
 <reflection>
 Root cause confidence: 55%
@@ -1284,7 +1377,7 @@ When you are CONFIDENT (≥80%), produce the final output:
 **Explanation**: [Why this fixes it]
 
 ### 📚 Resources
-[Real URLs from context search]
+[Real URLs from context search, or "Resolved from memory — seen this pattern before"]
 
 ### 🛡️ Prevention
 [How to avoid this in the future]
@@ -1298,9 +1391,11 @@ When you are CONFIDENT (≥80%), produce the final output:
 4. **RE-RUN IF NEEDED** - Low confidence? Gather more info.
 5. **BE SPECIFIC** - Generic answers are useless
 6. **USE REAL DATA** - Only include URLs/info that came from tools
-7. **ALWAYS USE MEMORY** - ALWAYS call `search_memory` early to check for known solutions.
-   ALWAYS call `store_pattern` at the end to save what you learned. This is how you get smarter over time.
-   The memory system is a core differentiator — use it every single time.
+7. **MEMORY IS YOUR ACCELERATOR** - ALWAYS call `search_memory` after parsing to check
+   for known solutions. If the match is relevant, FAST PATH to the fix — this is the
+   whole point. If not, do full analysis and forget about memory until the end.
+8. **ALWAYS LEARN** - ALWAYS call `store_pattern` at the end. Every solved error
+   makes the next one faster. This is how you get smarter over time.
 """
 
 # Select the correct prompt based on feature part

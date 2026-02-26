@@ -842,18 +842,26 @@ function updateMemoryDisplay() {
     }
     els.shortTermCount.textContent = state.shortTermMemory.length;
     
-    // Long-term (from AgentCore Memory API search results)
+    // Long-term (from AgentCore Memory API search results + patterns stored this session)
     if (state.longTermMemory.length > 0) {
-        els.longTermList.innerHTML = state.longTermMemory.map(m => `
-            <div class="memory-item">
-                <div class="memory-item-header">
-                    <span class="memory-item-type">${escapeHtml(m.error_type || m.type || 'pattern')}</span>
-                    ${m.relevance_score ? `<span class="memory-item-count">${m.relevance_score}% match</span>` : ''}
-                    ${m.success_count ? `<span class="memory-item-count">×${m.success_count}</span>` : ''}
+        els.longTermList.innerHTML = state.longTermMemory.map(m => {
+            const isLearned = m.source === 'learned';
+            const badge = isLearned 
+                ? '<span class="memory-item-badge learned">✨ Learned</span>'
+                : (m.relevance_score ? `<span class="memory-item-count">${m.relevance_score}% match</span>` : '');
+            const countBadge = m.success_count ? `<span class="memory-item-count">×${m.success_count}</span>` : '';
+            
+            return `
+                <div class="memory-item ${isLearned ? 'learned' : ''}">
+                    <div class="memory-item-header">
+                        <span class="memory-item-type">${escapeHtml(m.error_type || m.type || 'pattern')}</span>
+                        ${badge}${countBadge}
+                    </div>
+                    <div class="memory-item-text">${escapeHtml(m.solution || m.root_cause || 'Stored pattern')}</div>
+                    ${m.language ? `<div class="memory-item-lang">${escapeHtml(m.language)}</div>` : ''}
                 </div>
-                <div class="memory-item-text">${escapeHtml(m.solution || m.root_cause || 'Stored pattern')}</div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     } else {
         els.longTermList.innerHTML = '<div class="memory-empty">Long-term patterns will appear after analyses</div>';
     }
@@ -948,7 +956,20 @@ async function callAgentCoreBackend(errorText) {
     updateAgentStatus('supervisor', 'running');
     addLogEntry('SUPERVISOR → Connecting to AgentCore...', 'agent-start');
     
+    // Sync GitHub state from DOM (covers autofill, paste, pre-populated values
+    // that may not have triggered 'input' events)
     const githubRepo = document.getElementById('githubRepo')?.value?.trim() || '';
+    state.githubRepo = githubRepo;
+    const githubBranch = document.getElementById('githubBranch')?.value?.trim() || 'main';
+    state.githubBranch = githubBranch;
+    const githubPat = document.getElementById('githubPat')?.value?.trim();
+    if (githubPat) SecureToken.set(githubPat);
+    
+    console.log('🔗 GitHub state synced:', {
+        hasRepo: !!githubRepo,
+        hasPAT: SecureToken.hasToken(),
+        repo: githubRepo || '(none)',
+    });
     
     // Initialize result structure
     let result = {
@@ -1207,26 +1228,60 @@ async function callAgentCoreBackend(errorText) {
             }
             
             if (data.agents.memory) {
-                const matches = data.agents.memory.matches || data.agents.memory.similar_errors || data.agents.memory.results || [];
+                const memData = data.agents.memory;
+                const matches = memData.matches || memData.similar_errors || memData.results || [];
+                const storedPatterns = memData.stored_patterns || [];
+                
                 result.memory = {
                     count: matches.length,
                     matches: matches,
-                    hasSolution: data.agents.memory.has_solution || data.agents.memory.has_solutions || false,
-                    analysis: data.agents.memory.analysis || '',
-                    rawData: data.agents.memory
+                    hasSolution: memData.has_solution || memData.has_solutions || false,
+                    analysis: memData.analysis || '',
+                    memorySearched: memData.memory_searched || false,
+                    patternStored: memData.pattern_stored || false,
+                    storedPatterns: storedPatterns,
+                    rawData: memData
                 };
                 
-                // Populate long-term memory panel from search results
-                if (matches.length > 0) {
-                    state.longTermMemory = matches.map(m => ({
+                console.log('🧠 Memory data:', {
+                    searchResults: matches.length,
+                    storedPatterns: storedPatterns.length,
+                    memorySearched: memData.memory_searched,
+                    patternStored: memData.pattern_stored,
+                });
+                
+                // Populate long-term memory panel
+                // First: search results (past matches found)
+                // Second: patterns stored THIS session (what agent learned)
+                const longTermEntries = [];
+                
+                // Add search matches (past patterns found)
+                for (const m of matches) {
+                    longTermEntries.push({
                         error_type: m.error_type || m.type || 'pattern',
                         root_cause: m.root_cause || '',
                         solution: m.solution || '',
                         language: m.language || '',
                         relevance_score: m.relevance_score || 0,
                         success_count: m.success_count || m.successCount || 0,
-                    }));
+                        source: 'recalled',
+                    });
                 }
+                
+                // Add patterns stored this session (what agent learned)
+                for (const p of storedPatterns) {
+                    longTermEntries.push({
+                        error_type: p.error_type || 'pattern',
+                        root_cause: p.root_cause || '',
+                        solution: p.solution || '',
+                        language: p.language || '',
+                        relevance_score: 0,
+                        success_count: 0,
+                        source: 'learned',  // Marks this as newly learned
+                    });
+                }
+                
+                state.longTermMemory = longTermEntries;
                 updateAgentStatus('memory', 'complete');
             }
             
@@ -1320,11 +1375,23 @@ async function callAgentCoreBackend(errorText) {
                 timestamp: now,
             });
         }
-        if (result.memory?.count > 0) {
+        // Memory operations — show both search and store activity
+        if (result.memory?.memorySearched) {
             sessionMemoryEntries.push({
-                type: 'memory_recall',
+                type: 'memory_search',
                 language: result.parsed.language,
-                text: `Found ${result.memory.count} similar past error(s) in long-term memory`,
+                text: result.memory.count > 0 
+                    ? `🔎 Found ${result.memory.count} similar past error(s) in long-term memory`
+                    : `🔎 Searched long-term memory (no prior matches — this is a new pattern)`,
+                timestamp: now,
+            });
+        }
+        if (result.memory?.patternStored && result.memory?.storedPatterns?.length > 0) {
+            const stored = result.memory.storedPatterns[0];
+            sessionMemoryEntries.push({
+                type: 'memory_store',
+                language: result.parsed.language,
+                text: `💾 Learned: stored "${stored.error_type}" pattern → "${(stored.solution || stored.root_cause || '').substring(0, 80)}"`,
                 timestamp: now,
             });
         }

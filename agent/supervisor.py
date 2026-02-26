@@ -578,7 +578,15 @@ def search_memory(error_text: str, limit: int = 5, language: str = "", error_typ
             return json.dumps({"success": False, "error": result.get('error'), **result})
         
         # Store in session context for final output
+        # Preserve any stored_patterns from store_pattern calls
+        existing_stored = session_context.get("memory", {}).get("stored_patterns", [])
         update_session_context("memory", result)
+        if existing_stored:
+            session_context["memory"]["stored_patterns"] = existing_stored
+        
+        # Also set 'searched' flag so frontend knows memory was actively used
+        session_context["memory"]["memory_searched"] = True
+        session_context["memory"]["search_query"] = search_query[:100]
         
         update_component_status("memory", "success", f"Found {count} similar errors in memory")
         return json.dumps({"success": True, **result})
@@ -597,6 +605,25 @@ def store_pattern(error_type: str, signature: str, root_cause: str, solution: st
     try:
         result = memory_agent.store_pattern(error_type, signature, root_cause, solution, language)
         logger.info(f"✅ Pattern stored")
+        
+        # Update session_context["memory"] so the frontend can see what was learned
+        # This is critical for the memory panel to show learned patterns
+        stored_pattern = {
+            "error_type": error_type,
+            "signature": signature,
+            "root_cause": root_cause,
+            "solution": solution,
+            "language": language,
+            "stored_this_session": True,
+        }
+        # Add to stored_patterns list in session context
+        if "stored_patterns" not in session_context.get("memory", {}):
+            session_context.setdefault("memory", {})["stored_patterns"] = []
+        session_context["memory"]["stored_patterns"].append(stored_pattern)
+        session_context["memory"]["pattern_stored"] = True
+        session_context["memory"]["stored_count"] = len(session_context["memory"]["stored_patterns"])
+        logger.info(f"📝 Added stored pattern to session_context['memory']['stored_patterns'] ({session_context['memory']['stored_count']} total)")
+        
         return json.dumps(result)
     except Exception as e:
         logger.error(f"❌ Store pattern error: {str(e)}")

@@ -741,6 +741,31 @@ body {
     font-size: 0.7rem;
 }
 
+.memory-item-lang {
+    color: var(--text-muted);
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    margin-top: 2px;
+}
+
+.memory-item.learned {
+    border-left-color: var(--accent-green);
+    background: rgba(63, 185, 80, 0.08);
+}
+
+.memory-item.learned .memory-item-type {
+    color: var(--accent-green);
+}
+
+.memory-item-badge.learned {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--accent-green);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    font-weight: 600;
+}
+
 .memory-divider {
     width: 1px;
     background: var(--border-color);
